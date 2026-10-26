@@ -48,11 +48,13 @@ export interface KnownDart {
    */
   suspectedGhost?: true;
   /**
-   * The tracker could not be sure of this dart: it was gone when a takeout was first seen
-   * (pulled, or withdrawn by the board before the takeout began), it survived a call-off that
-   * dropped other darts, or it was matched without coordinates when the board removed a dart
-   * that was not the last one. It was flagged with a `DartUpdated{pendingReview}`, and every
-   * later fact about it stays `pendingReview`.
+   * The tracker could not be sure of this dart or of its visit: it was gone when a takeout was
+   * first seen, or when a resync found one going on (pulled, or withdrawn by the board while we
+   * were not looking); its visit, first seen in a takeout after an outage, had room for a dart
+   * thrown and pulled unseen; it survived a call-off that dropped other darts; or it was matched
+   * without coordinates when the board removed a dart that was not the last one. It was flagged
+   * with a `DartUpdated{pendingReview}` (its segment unchanged when only the flag is news), and
+   * every later fact about it stays `pendingReview`.
    */
   inDoubt?: true;
 }
