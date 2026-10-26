@@ -1,3 +1,4 @@
+import { SOURCE_ANOMALY_NOTE_MAX } from '@arcade/event-schema';
 import { z } from 'zod';
 
 /**
@@ -96,14 +97,142 @@ export function parseEventFrame(text: string): ParsedFrame {
   return state.ok ? { kind: 'state', data: state.data } : { kind: 'invalid', note: state.note };
 }
 
-const SECRET_VALUE = /("[A-Za-z0-9_]*(?:key|Key|KEY|token|Token|secret|Secret|password|Password|cert|Cert)"\s*:\s*)("(?:[^"\\]|\\.)*"|[^,}\]\s]+)/g;
+// ── secret redaction (defence in depth: the allowlisted endpoints never carry secrets) ──────
 
 /**
- * Replaces the value of any JSON key that ends in key/token/secret/password/cert. The
- * allowlisted endpoints never carry secrets; this is defence in depth for diagnostics.
+ * A key whose value is a secret, matched anywhere in its name, in any case: token, password,
+ * passwd, secret, key (apiKey, api-key, api_key, x-api-key, privateKeyPem, …), auth
+ * (Authorization), cert (certificate), pem, private, credential, session, cookie.
+ */
+const SECRET_KEY = /token|passw(?:or)?d|secret|key|auth|cert|pem|private|credential|session|cookie/i;
+
+export const REDACTED = '[redacted]';
+
+export function isSecretKey(name: string): boolean {
+  return SECRET_KEY.test(name);
+}
+
+/**
+ * Text with every secret value replaced by `"[redacted]"`, whole: a string, a number, an object
+ * or a list under a secret key. Complete JSON (up to MAX_FRAME_CHARS) is parsed and rewritten
+ * from the parsed value; anything else (cut-off JSON, plain text, diagnostics notes) is scanned
+ * for `"key": value` pairs, nested values matched to their closing bracket or to the end of the
+ * text, and for plain-text `key: value` and `key=value`. Never throws.
  */
 export function redactSecrets(text: string): string {
-  return text.replace(SECRET_VALUE, '$1"[redacted]"');
+  try {
+    const head = text.trimStart()[0];
+    if ((head === '{' || head === '[') && text.length <= MAX_FRAME_CHARS) {
+      const json = parseJson(text);
+      if (json.ok) return redactPlainPairs(serialize(json.value, Infinity));
+    }
+    return redactPlainPairs(redactQuotedPairs(text));
+  } catch {
+    return REDACTED;
+  }
+}
+
+/** Index just past the JSON string that starts at `i`, or the end of the text if it never closes. */
+function stringEnd(text: string, i: number): number {
+  for (let j = i + 1; j < text.length; j++) {
+    const c = text[j];
+    if (c === '\\') j++;
+    else if (c === '"') return j + 1;
+  }
+  return text.length;
+}
+
+/** A bare value runs to , ; & } ] a line break or an unescaped quote. */
+function bareEnd(text: string, i: number): number {
+  for (let j = i; j < text.length; j++) {
+    const c = text[j];
+    if (c === '\\') j++;
+    else if (c === ',' || c === ';' || c === '&' || c === '}' || c === ']' || c === '\n' || c === '\r' || c === '"') return j;
+  }
+  return text.length;
+}
+
+/** Index just past the value that starts at `i`: a string, a bracketed value to its match, or a bare run. */
+function valueEnd(text: string, i: number): number {
+  const c = text[i];
+  if (c === '"') return stringEnd(text, i);
+  if (c !== '{' && c !== '[') return bareEnd(text, i);
+  let depth = 0;
+  for (let j = i; j < text.length; j++) {
+    const d = text[j];
+    if (d === '"') j = stringEnd(text, j) - 1;
+    else if (d === '{' || d === '[') depth++;
+    else if (d === '}' || d === ']') {
+      depth--;
+      if (depth === 0) return j + 1;
+    }
+  }
+  return text.length;
+}
+
+function skipBlank(text: string, i: number): number {
+  let j = i;
+  while (j < text.length && /\s/.test(text[j] as string)) j++;
+  return j;
+}
+
+/** `"secretKey": value` → `"secretKey": "[redacted]"`, the whole value. */
+function redactQuotedPairs(text: string): string {
+  let out = '';
+  let from = 0;
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== '"') {
+      i++;
+      continue;
+    }
+    const end = stringEnd(text, i);
+    const colon = skipBlank(text, end);
+    if (text[colon] === ':' && isSecretKey(keyText(text.slice(i, end)))) {
+      const at = skipBlank(text, colon + 1);
+      out += `${text.slice(from, at)}"${REDACTED}"`;
+      from = i = at < text.length ? valueEnd(text, at) : at;
+      continue;
+    }
+    i = end;
+  }
+  return out + text.slice(from);
+}
+
+function keyText(quoted: string): string {
+  const json = parseJson(quoted.endsWith('"') && quoted.length > 1 ? quoted : `${quoted}"`);
+  return json.ok && typeof json.value === 'string' ? json.value : quoted;
+}
+
+const WORD = /[A-Za-z0-9_.-]/;
+
+/**
+ * Plain-text `secretKey: value` and `secretKey=value` (in notes, error texts and JSON string
+ * values) → `secretKey: [redacted]`. The value runs to , ; & } ] a line break or a quote.
+ */
+function redactPlainPairs(text: string): string {
+  let out = '';
+  let from = 0;
+  let i = 0;
+  while (i < text.length) {
+    if (!WORD.test(text[i] as string) || (i > 0 && WORD.test(text[i - 1] as string))) {
+      i++;
+      continue;
+    }
+    let end = i;
+    while (end < text.length && WORD.test(text[end] as string)) end++;
+    let j = end;
+    while (j < text.length && (text[j] === '"' || text[j] === "'" || text[j] === '\\' || text[j] === ' ' || text[j] === '\t')) j++;
+    if ((text[j] === ':' || text[j] === '=') && isSecretKey(text.slice(i, end))) {
+      let at = j + 1;
+      while (at < text.length && (text[at] === ' ' || text[at] === '\t' || text[at] === '"' || text[at] === "'" || text[at] === '\\')) at++;
+      out += `${text.slice(from, at)}${REDACTED}`;
+      from = i = text[at] === '{' || text[at] === '[' ? valueEnd(text, at) : bareEnd(text, at);
+      continue;
+    }
+    i = end;
+  }
+  return out + text.slice(from);
 }
 
 /** Levels `serialize` descends into; deeper values read `[…]`. */
@@ -114,8 +243,9 @@ const MAX_DEPTH = 16;
  * of the value's: accessors read `[getter]`, and toJSON, toString and valueOf are never called, so
  * a hostile value (a throwing getter or proxy trap, an object that cannot become a string, a
  * cycle, nesting deeper than the stack) cannot break it. Plain JSON data comes out exactly as
- * `JSON.stringify` writes it. Cycles read `[cycle]`, anything unreadable `[unreadable]`, and
- * writing stops once `budget` characters are out (the result may run a little past it).
+ * `JSON.stringify` writes it, except that the whole value under a secret key (`isSecretKey`)
+ * reads `[redacted]`. Cycles read `[cycle]`, anything unreadable `[unreadable]`, and writing
+ * stops once `budget` characters are out (the result may run a little past it).
  */
 export function serialize(value: unknown, budget: number): string {
   const out: string[] = [];
@@ -185,7 +315,9 @@ export function serialize(value: unknown, budget: number): string {
           if (item === undefined || typeof item === 'function' || typeof item === 'symbol') continue;
           put(`${first ? '' : ','}${JSON.stringify(k)}:`);
           first = false;
-          walk(item, depth + 1);
+          // A secret key's whole value goes, whatever it is.
+          if (isSecretKey(k)) put(`"${REDACTED}"`);
+          else walk(item, depth + 1);
         }
         put('}');
       }
@@ -209,13 +341,28 @@ export function serialize(value: unknown, budget: number): string {
 
 /** A size-capped, secret-free excerpt for `SourceAnomaly.rawExcerpt` and diagnostics. Never throws. */
 export function excerpt(value: unknown, max = MAX_EXCERPT_CHARS): string {
-  // Truncate before redacting so the regex never scans a huge string.
-  const text = typeof value === 'string' ? value : serialize(value, max * 2);
-  const head = text.length > max * 2 ? text.slice(0, max * 2) : text;
-  const clean = redactSecrets(head);
+  let clean: string;
+  let length: string;
+  if (typeof value === 'string') {
+    // Redacted whole while it can be parsed; a longer text only as far as it can be shown.
+    clean = redactSecrets(value.length <= MAX_FRAME_CHARS ? value : value.slice(0, max * 2));
+    length = `${value.length}`;
+  } else {
+    const text = serialize(value, max * 2);
+    clean = redactSecrets(text);
+    // A long value's rendering stops early, so its length is only a lower bound.
+    length = text.length < max * 2 ? `${text.length}` : `${text.length}+`;
+  }
   if (clean.length <= max) return clean;
-  // A long value's serialization stops early, so its length is only a lower bound.
-  const length = typeof value === 'string' || text.length < max * 2 ? `${text.length}` : `${text.length}+`;
   const suffix = `…(${length} chars)`;
   return `${clean.slice(0, Math.max(0, max - suffix.length))}${suffix}`.slice(0, max);
+}
+
+/** Longest `SourceAnomaly.note` (the event schema's cap). */
+export const MAX_NOTE_CHARS = SOURCE_ANOMALY_NOTE_MAX;
+
+/** A diagnostics note (or error text) as it may be logged: secrets redacted, at most `max` characters. */
+export function cleanNote(note: string, max = MAX_NOTE_CHARS): string {
+  const clean = redactSecrets(note.length > max * 4 ? note.slice(0, max * 4) : note);
+  return clean.length <= max ? clean : `${clean.slice(0, max - 1)}…`;
 }

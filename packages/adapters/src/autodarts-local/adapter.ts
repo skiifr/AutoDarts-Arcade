@@ -1,7 +1,7 @@
 import type { BoardFactDraft, EventSource } from '@arcade/event-schema';
 import type { BoardGetPath } from '../endpoints';
 import { Listeners, type BoardSource, type Clock, type EventsSocket, type FactListener, type HttpResponse, type IdSource, type RandomSource, type Scheduler, type TimerHandle, type Transport } from '../ports';
-import { MAX_FRAME_CHARS, excerpt, parseEventFrame, parseStateBody, serialize } from '../raw';
+import { MAX_FRAME_CHARS, cleanNote, excerpt, parseEventFrame, parseStateBody, serialize } from '../raw';
 import { RawFrameRing, type RawChannel } from '../ring-buffer';
 import { epochMsFromIso } from '../simulator/iso-time';
 import type { RestoredVisitState } from './rebuild';
@@ -740,7 +740,10 @@ export class AutodartsLocalAdapter implements BoardSource {
   }
 
   private emit(body: FactBody, correlationId = this.resyncCorrelation): void {
-    const draft = { ...body, source: this.source(), occurredAt: this.o.clock() } as BoardFactDraft;
+    // Every anomaly, whoever wrote it, leaves with its secrets redacted and its note capped.
+    const clean: FactBody =
+      body.type === 'SourceAnomaly' ? { type: body.type, payload: { note: cleanNote(body.payload.note), rawExcerpt: excerpt(body.payload.rawExcerpt) } } : body;
+    const draft = { ...clean, source: this.source(), occurredAt: this.o.clock() } as BoardFactDraft;
     if (correlationId !== undefined) draft.correlationId = correlationId;
     this.facts.emit(draft);
   }
@@ -756,7 +759,7 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.lastEmittedConn = state;
     const payload: { state: typeof state; attempt?: number; error?: string } = { state };
     if (state !== 'online' && this.attempt > 0) payload.attempt = this.attempt;
-    if (error !== undefined) payload.error = error.slice(0, 200);
+    if (error !== undefined) payload.error = cleanNote(error, 200);
     this.emit({ type: 'SourceConnectionChanged', payload });
   }
 
