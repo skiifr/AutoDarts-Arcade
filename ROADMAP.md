@@ -1,6 +1,6 @@
 # AutoDarts Arcade — Roadmap
 
-> **Companion documents:** [ARCHITECTURE.md](ARCHITECTURE.md) (design and evidence) · [RISK-REGISTER.md](RISK-REGISTER.md) (risks R01–R27).
+> **Companion documents:** [ARCHITECTURE.md](ARCHITECTURE.md) (design and evidence) · [RISK-REGISTER.md](RISK-REGISTER.md) (risks R01–R28).
 > Phase 0 is complete when these three documents are accepted. Phases 1–6 below, with hardware checkpoint HC1, are the implementation roadmap. **No code or deployment happens until Phase 1 is approved.**
 
 ---
@@ -322,7 +322,7 @@ The causes of a breach matter:
 
 **Scope**
 - **Phone companion** (optional): a LAN server in the host app (4K Max or iPad), QR pairing with a one-time token, and commands for name entry, corrections and operator actions.
-- **Soak and resilience:** 4-hour simulated sessions with periodic board and Wi-Fi drops.
+- **Soak and resilience:** 4-hour simulated sessions with periodic board and Wi-Fi drops. Recovery from a failed log append (R28).
 - **Home release:** final private builds on every household device. TestFlight builds expire after 90 days 🟡[P27], so a fresh build is uploaded at least every 90 days. EAS Build + Submit can automate this ⚪.
 - User documentation: setup, troubleshooting, and the "your board updated and something broke" playbook.
 

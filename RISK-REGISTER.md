@@ -6,7 +6,7 @@
 > - **TestFlight** on a paid Apple Developer account for iOS;
 > - the **Pi 4 is kept through Phase 5**, with an upgrade only if the H1 review proves the need.
 > Review at every phase gate in [ROADMAP.md](ROADMAP.md).
-> **Evidence:** ✅ verified · 🟡 community-reported · ⚪ assumption. Source IDs ([S#], [C#], [P#]) refer to [ARCHITECTURE.md §12](ARCHITECTURE.md#12-sources).
+> **Evidence:** ✅ verified · 🟡 community-reported · ⚪ assumption · **sim** proven only in simulation ([ARCHITECTURE.md §11](ARCHITECTURE.md#11-verified-vs-assumed-ledger)). Source IDs ([S#], [C#], [P#]) refer to [ARCHITECTURE.md §12](ARCHITECTURE.md#12-sources).
 > **Scoring:** Likelihood (L) and Impact (I) are each rated 1–5. Score = L × I. **High ≥ 15**, Medium 8–14, Low ≤ 7.
 > **Roles:** *Owner* = project owner (decisions, purchases, contact with Autodarts); *Lead* = development lead.
 
@@ -30,6 +30,7 @@
 | R17 | Board API key / TLS key exposed via `/api/config` and `/api/system` | Security | 🟡 | 2 | 4 | 8 Med | P2 | Open |
 | R15 | Android cleartext rules / Android 17 local-network permission | Platform | ✅ | 2 | 3 | 6 Low | P1 | Open |
 | R27 | Fire OS sideload friction (iOS resolved: TestFlight on a paid account) | Distribution | ✅/🟡 | 2 | 3 | 6 Low | HC1 / P6 | Open |
+| R28 | A failed log append leaves the adapter ahead of the log | Data | ✅ sim / ⚪ | 2 | 3 | 6 Low | P6 | Open (known issue, no recovery yet) |
 | R03 | Autodarts ToS: third-party / commercial use | Legal | ✅ + owner-attested | 1 | 5 | 5 Low | P0 | **Mitigated:** private use, staff permission |
 | R04 | Fire TV fragmentation (Vega sticks can't run the Android build) | Platform | ✅ | 1 | 4 | 4 Low | — | **Resolved for current hardware** |
 | R20 | Clock skew corrupts ordering | Data | ⚪ | 2 | 2 | 4 Low | P2 | Mitigated by design |
@@ -204,6 +205,18 @@
 ### R15 · Android cleartext / local-network permission — 6 Low
 - **Cause:** Cleartext traffic is blocked by default on API 28+. Android 17 adds `ACCESS_LOCAL_NETWORK` for apps targeting API 37 ✅[P19][P20]. This doesn't affect the 4K Max (Fire OS 7/8).
 - **Mitigation:** `usesCleartextTraffic`. Plan the permission flow before raising the target SDK.
+- **Owner:** Lead.
+
+### R28 · A failed log append leaves the adapter ahead of the log — 6 Low
+- **Cause:** The host writes ahead. If `LogStore.append` fails, it records nothing and its state stays as it was. But the adapter has already moved on: it counts the dart, or the takeout, as sent and won't send it again. `createArcadeRuntime` reports the failure only through `onError`. ✅ **sim** (`arcade-runtime.test.ts` pins this)
+- **Impact:** Play goes on with a dart that no turn holds, or a takeout that ended no turn, and nothing is flagged. A full or failing device disk is the likely trigger ⚪.
+- **Today:** No automatic recovery. Only a crash-resume notices: rebuilt from the log, the adapter can't place what was lost, so it infers a takeout. The turn is flagged, play pauses for review, and the board's darts are held as `recovered` ✅ **sim**. Flagged, not silent, but clumsy.
+- **Mitigation plan (Phase 6 hardening):**
+  - Retry the append a few times, with backoff, before giving up.
+  - If it still fails, do what a crash-resume does, at once: stop the source, rebuild its visit state from the persisted log (`rebuildVisitState`, `restore()`) and resync. What was lost then comes back flagged.
+  - Show the failure in W3, not only in `onError`.
+  - Add a failing `LogStore` to the end-to-end chaos suite, with zero silent mismatches as the bar.
+- **Early warning:** `onError` reports carrying an `error` (a thrown append), not a `rejected` result.
 - **Owner:** Lead.
 
 ### R03 · Autodarts ToS: third-party and commercial use — 5 Low (mitigated)
