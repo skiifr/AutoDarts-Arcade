@@ -1,7 +1,7 @@
 import type { ArcadeEvent } from '@arcade/event-schema';
 import { MemoryLogStore as EngineMemoryLogStore, LogAppendError as EngineLogAppendError, type LogStore } from '@arcade/engine';
-import { describe, expect, it } from 'vitest';
-import { expoSqliteExecutor, type ExpoSqliteDatabaseLike } from './expo-sqlite';
+import { describe, expect, it, vi } from 'vitest';
+import { expoSqliteExecutor, type ExpoSqliteDatabaseLike, type ExpoStatementsLike } from './expo-sqlite';
 import { LogAppendError, MemoryLogStore } from './memory';
 import { SqliteLogStore, type SqlExecutor, type SqlTx, type SqlValue } from './sqlite';
 
@@ -33,15 +33,100 @@ function ev(sessionId: string, seq: number, type: 'TakeoutStarted' | 'SessionClo
   } as ArcadeEvent;
 }
 
+interface NodeStatement {
+  run(...params: SqlValue[]): unknown;
+  all(...params: SqlValue[]): unknown[];
+  get(...params: SqlValue[]): unknown;
+  /** Node 22.13+. */
+  iterate?(...params: SqlValue[]): IterableIterator<unknown>;
+}
 interface NodeDb {
   exec(sql: string): void;
-  prepare(sql: string): { run(...params: SqlValue[]): unknown; all(...params: SqlValue[]): unknown[] };
+  prepare(sql: string): NodeStatement;
+  close(): void;
+}
+type NodeSqlite = { DatabaseSync: new (path: string) => NodeDb };
+
+async function nodeSqlite(): Promise<NodeSqlite> {
+  const specifier = 'node:sqlite';
+  return (await import(/* @vite-ignore */ specifier)) as NodeSqlite;
+}
+
+/** A fresh database file in the system temp directory (node:fs and node:os, typed structurally). */
+async function tempDbFile(): Promise<string> {
+  const [fsSpecifier, osSpecifier] = ['node:fs', 'node:os'];
+  const fs = (await import(/* @vite-ignore */ fsSpecifier)) as { mkdtempSync(prefix: string): string };
+  const os = (await import(/* @vite-ignore */ osSpecifier)) as { tmpdir(): string };
+  return `${fs.mkdtempSync(`${os.tmpdir()}/arcade-log-`)}/arcade.db`;
+}
+
+const tick = (): Promise<void> => new Promise<void>((r) => setTimeout(() => r(), 0));
+
+/**
+ * expo-sqlite's async database, copied in behaviour over a real SQLite (node:sqlite):
+ * - statements run on one connection; a read steps through its rows asynchronously, as the
+ *   native module does on its own thread, so the read stays open while other work runs;
+ * - `withTransactionAsync` is BEGIN, the task, COMMIT (ROLLBACK on error) on that connection;
+ * - `withExclusiveTransactionAsync` opens a new connection for each call on native, and on
+ *   web is defined but throws before running the task, exactly as expo-sqlite does.
+ */
+function expoLikeDatabase(mod: NodeSqlite, path: string, platform: 'native' | 'web'): ExpoSqliteDatabaseLike & { main: NodeDb } {
+  const on = (db: NodeDb): ExpoStatementsLike => ({
+    execAsync: async (sql) => {
+      db.exec(sql);
+    },
+    runAsync: async (sql, params) => {
+      db.prepare(sql).run(...params);
+    },
+    getAllAsync: async <T,>(sql: string, params: SqlValue[]) => {
+      const statement = db.prepare(sql);
+      if (!statement.iterate) return statement.all(...params).map((r) => ({ ...(r as object) })) as T[];
+      const rows: T[] = [];
+      for (const row of statement.iterate(...params)) {
+        rows.push({ ...(row as object) } as T);
+        await tick();
+      }
+      return rows;
+    },
+  });
+  const main = new mod.DatabaseSync(path);
+  const base = on(main);
+  return {
+    ...base,
+    main,
+    withTransactionAsync: async (task) => {
+      try {
+        await base.execAsync('BEGIN');
+        await task();
+        await base.execAsync('COMMIT');
+      } catch (e) {
+        await base.execAsync('ROLLBACK');
+        throw e;
+      }
+    },
+    withExclusiveTransactionAsync: async (task) => {
+      if (platform === 'web') throw new Error('withExclusiveTransactionAsync is not supported on web');
+      const connection = new mod.DatabaseSync(path);
+      const txn = on(connection);
+      let error: unknown;
+      try {
+        await txn.execAsync('BEGIN');
+        await task(txn);
+        await txn.execAsync('COMMIT');
+      } catch (e) {
+        await txn.execAsync('ROLLBACK');
+        error = e;
+      } finally {
+        connection.close();
+      }
+      if (error) throw error;
+    },
+  };
 }
 
 /** A real SQLite (Node 22's node:sqlite) behind the executor interface. */
 async function nodeSqliteExecutor(): Promise<SqlExecutor & { db: NodeDb }> {
-  const specifier = 'node:sqlite';
-  const mod = (await import(/* @vite-ignore */ specifier)) as { DatabaseSync: new (path: string) => NodeDb };
+  const mod = await nodeSqlite();
   const db = new mod.DatabaseSync(':memory:');
   const tx: SqlTx = {
     run: async (sql, params) => {
@@ -122,6 +207,10 @@ describe('one MemoryLogStore', () => {
 
 contract('MemoryLogStore (engine)', async () => new EngineMemoryLogStore());
 contract('SqliteLogStore on node:sqlite', async () => new SqliteLogStore(await nodeSqliteExecutor()));
+contract('SqliteLogStore on expo-sqlite as on web', async () => new SqliteLogStore(expoSqliteExecutor(expoLikeDatabase(await nodeSqlite(), ':memory:', 'web'))));
+contract('SqliteLogStore on expo-sqlite as on native, in a file', async () =>
+  new SqliteLogStore(expoSqliteExecutor(expoLikeDatabase(await nodeSqlite(), await tempDbFile(), 'native'))),
+);
 
 describe('SqliteLogStore specifics', () => {
   it('append resolves only after COMMIT, with every insert inside the transaction', async () => {
@@ -222,5 +311,60 @@ describe('expoSqliteExecutor', () => {
     };
     await expoSqliteExecutor(web).transaction(async (tx) => tx.run('Y', []));
     expect(calls).toEqual(['exclusive', 'run X 1', 'plain', 'run Y 0']);
+  });
+
+  it('on web, where withExclusiveTransactionAsync is defined but throws, appends use withTransactionAsync', async () => {
+    const db = expoLikeDatabase(await nodeSqlite(), ':memory:', 'web');
+    const exclusive = vi.spyOn(db, 'withExclusiveTransactionAsync');
+    const plain = vi.spyOn(db, 'withTransactionAsync');
+    const store = new SqliteLogStore(expoSqliteExecutor(db));
+    await store.append(S1, [ev(S1, 1)]);
+    await store.append(S1, [ev(S1, 2)]);
+    expect((await store.load(S1)).map((e) => e.seq)).toEqual([1, 2]);
+    expect(exclusive).toHaveBeenCalledTimes(1); // tried once, then known to be web
+    expect(plain).toHaveBeenCalledTimes(2);
+  });
+
+  it('exclusive: false never tries the exclusive transaction; exclusive: true never falls back', async () => {
+    const db = expoLikeDatabase(await nodeSqlite(), ':memory:', 'web');
+    const exclusive = vi.spyOn(db, 'withExclusiveTransactionAsync');
+    await new SqliteLogStore(expoSqliteExecutor(db, { exclusive: false })).append(S1, [ev(S1, 1)]);
+    expect(exclusive).not.toHaveBeenCalled();
+    await expect(new SqliteLogStore(expoSqliteExecutor(db, { exclusive: true })).append(S2, [ev(S2, 1)])).rejects.toThrow(/not supported on web/);
+  });
+
+  it('a task that fails inside the exclusive transaction is not run again', async () => {
+    const db = expoLikeDatabase(await nodeSqlite(), await tempDbFile(), 'native');
+    const plain = vi.spyOn(db, 'withTransactionAsync');
+    let runs = 0;
+    const exec = expoSqliteExecutor(db);
+    await expect(
+      exec.transaction(async () => {
+        runs++;
+        throw new Error('not supported on web'); // even with that message
+      }),
+    ).rejects.toThrow();
+    expect(runs).toBe(1);
+    expect(plain).not.toHaveBeenCalled();
+  });
+
+  it('on web a load waits for the append in flight, so it never reads a batch that is rolled back', async () => {
+    const db = expoLikeDatabase(await nodeSqlite(), ':memory:', 'web');
+    let loadedMeanwhile: Promise<ArcadeEvent[]> | undefined;
+    const store = new SqliteLogStore(
+      expoSqliteExecutor({
+        ...db,
+        withExclusiveTransactionAsync: undefined,
+        withTransactionAsync: (task) =>
+          db.withTransactionAsync(async () => {
+            await task();
+            loadedMeanwhile = store.load(S1); // the batch is inserted, not committed
+            await tick();
+            throw new Error('disk full');
+          }),
+      }),
+    );
+    await expect(store.append(S1, [ev(S1, 1), ev(S1, 2)])).rejects.toThrow('disk full');
+    expect(await loadedMeanwhile).toEqual([]);
   });
 });
