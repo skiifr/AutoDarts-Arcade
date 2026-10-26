@@ -1,6 +1,6 @@
 import type { ArcadeEvent } from '@arcade/event-schema';
 import { MemoryLogStore as EngineMemoryLogStore, LogAppendError as EngineLogAppendError, type LogStore } from '@arcade/engine';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { expoSqliteExecutor, type ExpoSqliteDatabaseLike, type ExpoStatementsLike } from './expo-sqlite';
 import { LogAppendError, MemoryLogStore } from './memory';
 import { SqliteLogStore, type SqlExecutor, type SqlTx, type SqlValue } from './sqlite';
@@ -52,12 +52,31 @@ async function nodeSqlite(): Promise<NodeSqlite> {
   return (await import(/* @vite-ignore */ specifier)) as NodeSqlite;
 }
 
+type NodeFs = { mkdtempSync(prefix: string): string; rmSync(path: string, options: { recursive: boolean; force: boolean }): void };
+async function nodeFs(): Promise<NodeFs> {
+  const specifier = 'node:fs';
+  return (await import(/* @vite-ignore */ specifier)) as NodeFs;
+}
+
+const tempDirs: string[] = [];
+afterAll(async () => {
+  const fs = await nodeFs();
+  for (const dir of tempDirs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // still open somewhere (Windows): the system cleans its temp directory
+    }
+  }
+});
+
 /** A fresh database file in the system temp directory (node:fs and node:os, typed structurally). */
 async function tempDbFile(): Promise<string> {
-  const [fsSpecifier, osSpecifier] = ['node:fs', 'node:os'];
-  const fs = (await import(/* @vite-ignore */ fsSpecifier)) as { mkdtempSync(prefix: string): string };
-  const os = (await import(/* @vite-ignore */ osSpecifier)) as { tmpdir(): string };
-  return `${fs.mkdtempSync(`${os.tmpdir()}/arcade-log-`)}/arcade.db`;
+  const specifier = 'node:os';
+  const os = (await import(/* @vite-ignore */ specifier)) as { tmpdir(): string };
+  const dir = (await nodeFs()).mkdtempSync(`${os.tmpdir()}/arcade-log-`);
+  tempDirs.push(dir);
+  return `${dir}/arcade.db`;
 }
 
 const tick = (): Promise<void> => new Promise<void>((r) => setTimeout(() => r(), 0));
@@ -279,12 +298,49 @@ describe('SqliteLogStore specifics', () => {
   });
 });
 
+describe('SqliteLogStore in a database file: WAL, busy timeout, full sync', () => {
+  const plain = (rows: unknown[]): unknown[] => rows.map((r) => ({ ...(r as object) }));
+
+  it('opens with WAL, a 5 s busy timeout and full sync, and every transaction connection waits too', async () => {
+    const db = expoLikeDatabase(await nodeSqlite(), await tempDbFile(), 'native');
+    const exec = expoSqliteExecutor(db);
+    await new SqliteLogStore(exec).init();
+    expect(plain([db.main.prepare('PRAGMA journal_mode').get()])).toEqual([{ journal_mode: 'wal' }]);
+    expect(plain([db.main.prepare('PRAGMA busy_timeout').get()])).toEqual([{ timeout: 5000 }]);
+    expect(plain([db.main.prepare('PRAGMA synchronous').get()])).toEqual([{ synchronous: 2 }]);
+    let inTransaction: unknown[] = [];
+    await exec.transaction(async (tx) => {
+      inTransaction = [...(await tx.all('PRAGMA journal_mode', [])), ...(await tx.all('PRAGMA busy_timeout', [])), ...(await tx.all('PRAGMA synchronous', []))];
+    });
+    expect(inTransaction).toEqual([{ journal_mode: 'wal' }, { timeout: 5000 }, { synchronous: 2 }]);
+  });
+
+  it('loads and appends overlapping in time never fail with SQLITE_BUSY', async (ctx) => {
+    const mod = await nodeSqlite();
+    const probe = new mod.DatabaseSync(':memory:');
+    const canHoldReads = typeof probe.prepare('SELECT 1').iterate === 'function';
+    probe.close();
+    if (!canHoldReads) ctx.skip(); // node:sqlite before Node 22.13 can't keep a read open
+    const file = await tempDbFile();
+    // The writer, and a second store on the same file (another screen, the dev tools) that
+    // steps through a long read while the writer commits on its own connection.
+    const writer = new SqliteLogStore(expoSqliteExecutor(expoLikeDatabase(mod, file, 'native')));
+    const reader = new SqliteLogStore(expoSqliteExecutor(expoLikeDatabase(mod, file, 'native')));
+    await writer.append(S1, Array.from({ length: 30 }, (_, i) => ev(S1, i + 1)));
+    const [loaded] = await Promise.all([reader.load(S1), writer.append(S1, [ev(S1, 31)]), writer.append(S1, [ev(S1, 32)])]);
+    expect(loaded.length).toBeGreaterThanOrEqual(30);
+    const [again] = await Promise.all([writer.load(S1), writer.append(S1, [ev(S1, 33)]), reader.listSessions()]);
+    expect(again).toHaveLength(32);
+    expect((await reader.load(S1)).map((e) => e.seq)).toEqual(Array.from({ length: 33 }, (_, i) => i + 1));
+  });
+});
+
 describe('expoSqliteExecutor', () => {
   it('uses the exclusive transaction where available and the plain one otherwise', async () => {
     const calls: string[] = [];
     const statements = {
-      execAsync: async () => {
-        calls.push('exec');
+      execAsync: async (sql: string) => {
+        calls.push(`exec ${sql}`);
       },
       runAsync: async (sql: string, params: SqlValue[]) => {
         calls.push(`run ${sql} ${params.length}`);
@@ -310,7 +366,7 @@ describe('expoSqliteExecutor', () => {
       },
     };
     await expoSqliteExecutor(web).transaction(async (tx) => tx.run('Y', []));
-    expect(calls).toEqual(['exclusive', 'run X 1', 'plain', 'run Y 0']);
+    expect(calls).toEqual(['exclusive', 'exec PRAGMA busy_timeout = 5000', 'run X 1', 'plain', 'run Y 0']);
   });
 
   it('on web, where withExclusiveTransactionAsync is defined but throws, appends use withTransactionAsync', async () => {

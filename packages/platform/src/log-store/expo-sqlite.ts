@@ -1,4 +1,4 @@
-import type { SqlExecutor, SqlTx, SqlValue } from './sqlite';
+import { LOG_BUSY_TIMEOUT_MS, type SqlExecutor, type SqlTx, type SqlValue } from './sqlite';
 
 /**
  * The parts of expo-sqlite's async `SQLiteDatabase` this binding uses. Typed
@@ -48,7 +48,9 @@ const WEB_UNSUPPORTED = /not supported on web/i;
 /**
  * `SqlExecutor` over expo-sqlite. Both kinds of transaction commit before they resolve and
  * roll back on error.
- * - **iOS, Android, Fire OS:** `withExclusiveTransactionAsync`, on its own connection.
+ * - **iOS, Android, Fire OS:** `withExclusiveTransactionAsync`, on a new connection each
+ *   time. A busy timeout is per connection, so it is set again there first (journal mode is
+ *   in the file, and synchronous is SQLite's default FULL: see `SqliteLogStore`).
  * - **Web:** `withTransactionAsync` on the one connection. expo-sqlite defines the exclusive
  *   kind there too, but it throws. The plain kind is enough because `SqliteLogStore` runs
  *   its appends, loads and listings one at a time, so nothing else can run inside an open
@@ -66,9 +68,10 @@ export function expoSqliteExecutor(db: ExpoSqliteDatabaseLike, options: ExpoSqli
       if (exclusive !== false && db.withExclusiveTransactionAsync) {
         let started = false;
         try {
-          await db.withExclusiveTransactionAsync((txn) => {
+          await db.withExclusiveTransactionAsync(async (txn) => {
             started = true;
-            return task(statements(txn));
+            await txn.execAsync(`PRAGMA busy_timeout = ${LOG_BUSY_TIMEOUT_MS}`);
+            await task(statements(txn));
           });
           exclusive = true;
           return;

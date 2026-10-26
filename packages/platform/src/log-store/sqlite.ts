@@ -23,6 +23,28 @@ export interface SqlExecutor extends SqlTx {
 
 export const LOG_SCHEMA_VERSION = 1;
 
+/** How long a statement waits for a lock before SQLite gives up with SQLITE_BUSY. */
+export const LOG_BUSY_TIMEOUT_MS = 5000;
+
+/**
+ * Connection settings, applied when the store opens the database (before the schema):
+ * - `busy_timeout`: a statement that meets a lock waits up to 5 s instead of failing at once
+ *   with SQLITE_BUSY. Per connection, so `expoSqliteExecutor` sets it again on the
+ *   connection each exclusive transaction opens. First, so the switch to WAL waits too.
+ * - `journal_mode = WAL`: readers and the one writer don't block each other, so a load and
+ *   an append overlapping in time can't fail at once. Stored in the file, so every later
+ *   connection uses it. Where WAL is unavailable (an in-memory database, a web VFS without
+ *   shared memory) SQLite keeps its mode, without an error.
+ * - `synchronous = FULL`: an append is on disk when it resolves, the host's write-ahead rule.
+ *   Also SQLite's default for new connections, which expo-sqlite does not change; it can't
+ *   be set inside a transaction, so the transaction connections rely on that default.
+ */
+const PRAGMAS = `
+PRAGMA busy_timeout = ${LOG_BUSY_TIMEOUT_MS};
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = FULL;
+`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS arcade_events (
   session_id TEXT NOT NULL,
@@ -62,9 +84,9 @@ export class SqliteLogStore implements LogStore {
     this.db = db;
   }
 
-  /** Creates the tables. Called lazily by every method; safe to call more than once. */
+  /** Applies the connection settings and creates the tables. Called lazily by every method; safe to call more than once. */
   init(): Promise<void> {
-    this.ready ??= this.db.exec(SCHEMA).catch((e: unknown) => {
+    this.ready ??= this.db.exec(PRAGMAS + SCHEMA).catch((e: unknown) => {
       this.ready = null;
       throw e;
     });
