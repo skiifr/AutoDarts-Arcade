@@ -30,6 +30,20 @@ Device builds (TestFlight, Android APK, Fire TV APK) are described in [apps/arca
 | `packages/ui-kit` | Theme, focus handling, dartboard and correction picker |
 | `docs/adr` | Architecture decision records |
 
+## Try it without a board
+
+Node 22 or newer, from the repository root:
+
+```sh
+yarn fake-board --port 3180 --scenario random-play
+yarn fault-proxy --target 127.0.0.1:3180 --listen 3181 --drop 0.1 --cut-every 30
+yarn play-headless --game countdown --players 2
+```
+
+- **`fake-board`** serves a simulated board's read API on port 3180. Point the app at this computer ([README](apps/devtools/fake-board/README.md)).
+- **`fault-proxy`** sits between the app and the board and drops, duplicates, delays or cuts frames. Point the app at port 3181 ([README](apps/devtools/fault-proxy/README.md)).
+- **`play-headless`** plays a whole game through the engine with a seeded thrower, no board or app needed. `--help` lists the options ([games README](packages/games/README.md#headless-runner)).
+
 ## Licence
 
 GPL-3.0 (see [LICENSE](LICENSE)). This doesn't matter for private installs. Before any outside contributions or store release, see ROADMAP **Q4** and risk **R07**.
