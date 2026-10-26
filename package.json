@@ -12,11 +12,13 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "tsc -p packages/event-schema && tsc -p packages/engine && tsc -p packages/games && tsc -p packages/adapters && tsc -p packages/platform && tsc -p packages/ui-kit && tsc -p apps/arcade",
+    "typecheck": "tsc -p packages/event-schema && tsc -p packages/engine && tsc -p packages/games && tsc -p packages/adapters && tsc -p packages/platform && tsc -p packages/ui-kit && tsc -p apps/arcade && tsc -p apps/devtools/fake-board && tsc -p apps/devtools/fault-proxy",
     "test": "vitest run",
     "check": "yarn lint && yarn typecheck && yarn test",
     "web": "yarn --cwd apps/arcade web",
-    "export:web": "yarn --cwd apps/arcade export:web"
+    "export:web": "yarn --cwd apps/arcade export:web",
+    "fake-board": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./apps/devtools/fake-board/register.mjs apps/devtools/fake-board/src/main.ts",
+    "fault-proxy": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./apps/devtools/fault-proxy/register.mjs apps/devtools/fault-proxy/src/main.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
