@@ -161,6 +161,8 @@ export class ArcadeRuntime {
   private unsettled = 0;
   private contactTimer: TimerHandle | null = null;
   private contactArmed: { mono: number; wall: number | undefined } = { mono: 0, wall: undefined };
+  /** The last contact this run recorded in the `contactStore`, and for which session. */
+  private recorded: { sessionId: string; ms: number } | null = null;
 
   constructor(options: ArcadeRuntimeOptions) {
     this.o = options;
@@ -428,6 +430,12 @@ export class ArcadeRuntime {
    * (the app was frozen) proves nothing, as in the adapter. What is stored is the source's own
    * `lastContactAt()`: the adapter's contact rules, LINK_LOSS_MS included, already applied. A
    * source without one stores the heartbeat less LINK_LOSS_MS, which comes to the same rule.
+   *
+   * The record only moves forward while the board stays online. The adapter's own goes back to
+   * its last frame or read while a liveness poll is out (an idle socket, every 5 s, for as long
+   * as the read takes); recording that would make a crash in the next moment look like a 5 s
+   * outage, though a crash just before the poll measures from the heartbeats. Both are the
+   * heartbeat's limit on a socket that died without closing (§6.4).
    */
   private contactTick(): void {
     this.contactTimer = null;
@@ -444,7 +452,12 @@ export class ArcadeRuntime {
       this.noteContact(wall);
       if (snapshot !== null && snapshot.closed === null) {
         const at = this.source.lastContactAt ? this.source.lastContactAt() : isoFromEpochMs(wall - LINK_LOSS_MS);
-        if (at !== undefined) this.o.contactStore!.set(snapshot.sessionId, at).catch((error: unknown) => this.report({ error }));
+        const ms = at === undefined ? undefined : epochMsFromIso(at);
+        const last = this.recorded?.sessionId === snapshot.sessionId ? this.recorded.ms : undefined;
+        if (at !== undefined && ms !== undefined && (last === undefined || ms > last)) {
+          this.recorded = { sessionId: snapshot.sessionId, ms };
+          this.o.contactStore!.set(snapshot.sessionId, at).catch((error: unknown) => this.report({ error }));
+        }
       }
     }
     this.armContactTick();

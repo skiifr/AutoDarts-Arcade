@@ -456,6 +456,28 @@ describe('crash-resume measures the outage from the last contact (ContactStore)'
     expect(await contacts.get('01JBX0000000000000000OTHER')).toBeUndefined();
   });
 
+  it('the stored contact does not go back while a liveness poll is out (e2e idle-crash seed 25184)', async () => {
+    // The adapter's own goes back to its last read while it polls the idle board: stored then, a
+    // crash a moment later measured a 5 s outage and paused a quick relaunch.
+    const contacts = new MemoryContactStore();
+    const world = makeWorld('contact-poll');
+    const inc = incarnate(world, 0, { contacts });
+    inc.runtime.start();
+    await world.sched.advance(500);
+    await inc.runtime.command('StartSession', COUNTDOWN);
+    const sessionId = inc.runtime.getSnapshot()!.sessionId;
+    const stored = async () => world.simMs((await contacts.get(sessionId))!);
+    await world.sched.advance(9900 - world.sched.now()); // the next liveness poll is due at ~10 s
+    world.transport.setSilent(true); // its answer is late
+    await world.sched.advance(1100);
+    const lastRead = world.transport.httpRequestsSince(0).at(-2)!.at;
+    expect(world.simMs(inc.adapter.lastContactAt()!)).toBeLessThanOrEqual(lastRead + 50);
+    expect(await stored()).toBeGreaterThan(9900 - LINK_LOSS_MS - CONTACT_EVERY_MS - 50);
+    world.transport.setSilent(false);
+    await world.sched.advance(5000); // the retry answers: forward again
+    expect(await stored()).toBeGreaterThan(world.sched.now() - LINK_LOSS_MS - CONTACT_EVERY_MS - 50);
+  });
+
   it('a source without lastContactAt stores its heartbeat less LINK_LOSS_MS: the same rule', async () => {
     const world = makeWorld('contact-no-last');
     const contacts = new MemoryContactStore();
