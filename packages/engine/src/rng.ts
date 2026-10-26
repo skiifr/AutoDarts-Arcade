@@ -63,6 +63,11 @@ export class SeededRng implements Rng {
     return [this.a, this.b, this.c, this.d];
   }
 
+  /** Rewinds this same object to a saved state, so games keep one Rng object across a refold. */
+  setState(state: RngState): void {
+    [this.a, this.b, this.c, this.d] = state;
+  }
+
   /** Uniform integer in [0, 2^32). */
   nextUint32(): number {
     // tmp = a + b + counter++ ; a = b ^ (b >> 9) ; b = c + (c << 3) ; c = rotl(c, 21) + tmp
