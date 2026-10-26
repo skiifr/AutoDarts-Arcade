@@ -8,6 +8,7 @@ import { systemClock, systemIds, systemScheduler } from './runtime';
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 function memoryStorage(initial: Record<string, string> = {}): KeyValueStorage & { data: Record<string, string> } {
@@ -142,5 +143,24 @@ describe('runtime', () => {
     expect(c.source.kind).toBe('autodarts-local');
     expect(c.health.isRunning).toBe(false);
     expect(() => connectBoard({ host: '1.1.1.1', port: 3180 })).toThrow();
+  });
+
+  it("connectBoard hands onListenerError to both the adapter's and the sampler's listeners", async () => {
+    vi.stubGlobal('fetch', async () => ({ status: 200, headers: { get: () => null }, text: async () => '{"fps": 12}' }));
+    const errors: string[] = [];
+    const c = connectBoard({ host: '192.168.1.40', port: 3180 }, { onListenerError: (e) => errors.push((e as Error).message) });
+    let heard = 0;
+    c.source.onConnectionStatus(() => {
+      throw new Error('status listener');
+    });
+    c.source.onConnectionStatus(() => heard++);
+    c.health.onSample(() => {
+      throw new Error('sample listener');
+    });
+    c.source.stop();
+    const sample = await c.health.sample();
+    expect(sample.fps).toBe(12);
+    expect(errors).toEqual(['status listener', 'sample listener']);
+    expect(heard).toBe(1);
   });
 });

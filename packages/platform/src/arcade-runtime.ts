@@ -34,7 +34,8 @@ export interface ArcadeRuntimeOptions {
   uiVersion?: string;
   /**
    * Board facts have no caller to answer: a fact the host refused or could not persist is
-   * reported here (default: ignored). The host's state is then exactly what it was before it.
+   * reported here (default: ignored). The host's state is then exactly what it was before it;
+   * after a failed append the source's is not (RISK-REGISTER R28).
    */
   onError?: (problem: { fact?: BoardFactDraft; command?: ArcadeCommand; error?: unknown; result?: HostResult }) => void;
 }
@@ -183,6 +184,11 @@ export class ArcadeRuntime {
         const result = await this.current.ingest(fact);
         if (result.status === 'rejected') this.o.onError?.({ fact, result });
       } catch (error) {
+        // Known issue, no recovery yet (RISK-REGISTER R28): LogStore.append failed, so the host
+        // is back where it was, but the source has already moved on and will not send this fact
+        // again. Its visit state is now ahead of the log (a dart no turn holds, or a takeout
+        // that ended no turn). Only a crash-resume, which rebuilds the source from the log,
+        // notices: what it cannot place is then flagged for review.
         this.o.onError?.({ fact, error });
       }
     });

@@ -56,9 +56,18 @@ function close(): void {
   set(IDLE);
 }
 
+/**
+ * A screen's listener threw while the board link was telling it something. The adapter keeps
+ * running either way; its default would report the error as uncaught, which can be fatal in a
+ * React Native release build, so the link logs it instead.
+ */
+function listenerErrorLogger(address: BoardAddress): (err: unknown) => void {
+  return (err) => console.warn(`[board-link] a listener of the board at ${address.host}:${address.port} threw; the link keeps running`, err);
+}
+
 function open(address: BoardAddress): void {
   close();
-  const conn = connectBoard(address);
+  const conn = connectBoard(address, { onListenerError: listenerErrorLogger(address) });
   const off = [
     conn.source.subscribe((fact) => set({ ticker: tickerReduce(state.ticker, fact) })),
     conn.source.onConnectionStatus((status) => {

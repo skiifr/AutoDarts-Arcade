@@ -32,6 +32,14 @@ describe('adapter chaos suite', () => {
     expect(total.detections).toBeGreaterThan(10000);
   }, 120_000);
 
+  it("seed 7489: a new dart 0.34 mm from the last visit's first dart is counted pending review, not dropped as a ghost", async () => {
+    const { rig, result } = await chaosRun(7489);
+    expect(result.violations).toEqual([]);
+    const flagged = rig.facts.filter((f) => f.type === 'DartDetected' && f.payload.pendingReview);
+    expect(flagged.map((f) => f.type === 'DartDetected' && f.payload.segment.label)).toEqual(['S4']);
+    expect(rig.facts.some((f) => f.type === 'SourceAnomaly' && /where the previous visit's darts were/.test(f.payload.note))).toBe(true);
+  });
+
   it('flags nothing on a clean network: 200 runs, every visit exact', async () => {
     for (let seed = 0; seed < 200; seed++) {
       const { result } = await chaosRun(10_000 + seed, { clean: true });

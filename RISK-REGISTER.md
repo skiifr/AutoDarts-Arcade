@@ -1,12 +1,12 @@
 # AutoDarts Arcade — Technical Risk Register (initial, Phase 0)
 
-> **Last reviewed:** 2026-10-26. Re-scored after the owner confirmed:
+> **Last reviewed:** 2026-10-26, at the Phase 2/3 integration: R02 and R10 updated, R23 re-scored for owner decision V and the public repository, R28 added. Earlier that day, re-scored after the owner confirmed:
 > - **private home use**, with permission from Autodarts staff (owner-attested);
 > - a **Fire TV Stick 4K Max** as the TV;
 > - **TestFlight** on a paid Apple Developer account for iOS;
 > - the **Pi 4 is kept through Phase 5**, with an upgrade only if the H1 review proves the need.
 > Review at every phase gate in [ROADMAP.md](ROADMAP.md).
-> **Evidence:** ✅ verified · 🟡 community-reported · ⚪ assumption. Source IDs ([S#], [C#], [P#]) refer to [ARCHITECTURE.md §12](ARCHITECTURE.md#12-sources).
+> **Evidence:** ✅ verified · 🟡 community-reported · ⚪ assumption · **sim** proven only in simulation ([ARCHITECTURE.md §11](ARCHITECTURE.md#11-verified-vs-assumed-ledger)). Source IDs ([S#], [C#], [P#]) refer to [ARCHITECTURE.md §12](ARCHITECTURE.md#12-sources).
 > **Scoring:** Likelihood (L) and Impact (I) are each rated 1–5. Score = L × I. **High ≥ 15**, Medium 8–14, Low ≤ 7.
 > **Roles:** *Owner* = project owner (decisions, purchases, contact with Autodarts); *Lead* = development lead.
 
@@ -16,7 +16,7 @@
 |---|---|---|---|---|---|---|---|---|
 | R01 | Undocumented local API changes, closes or adds auth (auto-updates) | Integration | ✅ | 4 | 5 | **20 High** | HC1→ongoing | Open |
 | R09 | Misdetected darts decide game outcomes | Product | 🟡 | 4 | 4 | **16 High** | P2–P4 | Open |
-| R10 | ID-less snapshot stream leads to lost or duplicated darts on reconnect | Integration | 🟡 | 4 | 4 | **16 High** | P2 | Open |
+| R10 | ID-less snapshot stream leads to lost or duplicated darts on reconnect | Integration | 🟡 | 4 | 4 | **16 High** | P2 | Open; mitigated in **sim**, HC1 to confirm |
 | R11 | Pi 4 undersized for detection (dropped FPS, missed darts) | Hardware | ✅ | 4 | 4 | **16 High** | P1–P5 → H1 | **Accepted through P5**; decided at H1 |
 | R02 | Autodarts 2.x local stream may not carry throws at all | Integration | 🟡 | 3 | 5 | **15 High** | HC1 (G1) | Open |
 | R06 | Effects too heavy for the 4K Max (2 GB, GE9215) | Performance | ✅/⚪ | 3 | 3 | 9 Med | P5 | Open |
@@ -27,14 +27,15 @@
 | R18 | React Native / `react-native-tvos` fork lag and library gaps | Tech stack | ✅ | 3 | 3 | 9 Med | P1→P6 | Open |
 | R21 | Scope vs capacity: four device classes, original art and sound | Delivery | ⚪ | 3 | 3 | 9 Med | all | Open |
 | R26 | An Autodarts match or other tool consumes the same darts concurrently | Integration | ⚪ | 3 | 3 | 9 Med | P2 / P4 | Open |
+| R23 | Asset / game-design originality (SMARTS reference, public repo) | IP | ⚪ | 3 | 3 | 9 Med | P4–P5 | Open (project principle; decision V) |
 | R17 | Board API key / TLS key exposed via `/api/config` and `/api/system` | Security | 🟡 | 2 | 4 | 8 Med | P2 | Open |
 | R15 | Android cleartext rules / Android 17 local-network permission | Platform | ✅ | 2 | 3 | 6 Low | P1 | Open |
 | R27 | Fire OS sideload friction (iOS resolved: TestFlight on a paid account) | Distribution | ✅/🟡 | 2 | 3 | 6 Low | HC1 / P6 | Open |
+| R28 | A failed log append leaves the adapter ahead of the log | Data | ✅ sim / ⚪ | 2 | 3 | 6 Low | P6 | Open (known issue, no recovery yet) |
 | R03 | Autodarts ToS: third-party / commercial use | Legal | ✅ + owner-attested | 1 | 5 | 5 Low | P0 | **Mitigated:** private use, staff permission |
 | R04 | Fire TV fragmentation (Vega sticks can't run the Android build) | Platform | ✅ | 1 | 4 | 4 Low | — | **Resolved for current hardware** |
 | R20 | Clock skew corrupts ordering | Data | ⚪ | 2 | 2 | 4 Low | P2 | Mitigated by design |
 | R22 | Inaccurate brief (hallucinated projects) propagates | Process | ✅ | 2 | 2 | 4 Low | P0 | **Mitigated** |
-| R23 | Asset / game-design originality | IP | ⚪ | 2 | 2 | 4 Low | P5 | Open (project principle) |
 | R24 | Player personal data (names, stats, avatars) | Privacy | ⚪ | 2 | 2 | 4 Low | P4 | Mitigated by design |
 | R25 | Companion pairing friction | Product | ⚪ | 2 | 2 | 4 Low | P6 | Open |
 | R05 | Vega LAN capabilities unknown | Platform | ⚪ | 3 | 1 | 3 Low | backlog | Deferred |
@@ -83,6 +84,11 @@
     - an inferred takeout ends the turn `needsReview`, pads no misses, and pauses the game until a person confirms the turn (`ConfirmTurn` → `TurnReviewed`);
     - a session can't close as completed while a flagged turn is unconfirmed.
   - P2 chaos suite: 1,000 runs, zero silent mismatches, and a review pause after every inferred takeout.
+- **Status (2026-10-26):** built, and proven in simulation **sim**.
+  - The adapter chaos suite: 1,000 seeded runs, board model → faults → adapter.
+  - The end-to-end chaos suite, through adapter, runtime and host playing real games: 1,000 Countdown runs with faults, 40 runs of each other game, 200 clean runs that flag nothing, and 400 crash-resumes. Zero silent mismatches.
+  - A dart where the previous visit's dart was is now counted pending review, not dropped as a ghost. A sweep of 8,000 more seeds of each suite finds no violation; before the fix it found one (seed 7489).
+  - Real-board evidence waits for HC1: golden replay of real captures and the on-device reconnect tests.
 - **Early warning:** Chaos-suite failures; `needsReview` frequency at home.
 - **Owner:** Lead.
 
@@ -111,7 +117,8 @@
   1. Pin the board version.
   2. Ask Autodarts staff how to read throws locally on 2.x.
   3. Fall back to a manual-entry arcade (ROADMAP HC1).
-- **Early warning:** The HC1 probe shows `state` frames without `throws` after a throw.
+- **Socket-path finding (2026-10-26):** the adapter first opened `/api/events?type=state` on 2.x. That form comes only from the owner's static inspection of the 2.0.2 binary, while both community clients and DartLab's real 2.0.2 capture use the bare `/api/events` path 🟡[C2][C3]. Had the query form been wrong, G1 could have read "no throws" and given a false no-go. The adapter now opens the bare path on every version and filters frames by type. `?type=state` stays opt-in (`stateOnlySocket`) and on the allowlist, and HC1 checks both 🔬.
+- **Early warning:** The HC1 probe shows `state` frames without `throws` after a throw, on both socket paths.
 - **Owner:** Lead.
 
 ### R06 · Effects too heavy for the 4K Max — 9 Medium
@@ -181,6 +188,16 @@
 - **Mitigation:** Guidance in W0 and W2. The board must be clear at game start. A warning if unexpected darts appear between turns.
 - **Owner:** Lead.
 
+### R23 · Asset and game-design originality — 9 Medium (re-scored from 4 Low)
+- **Cause:** The brief is "inspired by BattleUp". Owner decision V now sets a SMARTS-style direction, after 501 Entertainment's interactive darts. Working from a named commercial reference makes a too-close copy more likely. And the repository is public, so anything copied would be published, not just installed at home. Private use limits the exposure less than it did. Originality is a stated project goal.
+- **Mitigation:**
+  - Original names and mechanics.
+  - Take only the composition from the reference (tall posters, *Up now* / *Up next*, themed stages), never its art, logos, names or screens (decision V).
+  - A style guide, approved with representative art at the Phase 4 entry gate.
+  - An `ASSETS.md` provenance log (author, tool, licence), which also keeps a future public release possible.
+  - An originality check against BattleUp's catalogue and the SMARTS games before release (ROADMAP P5).
+- **Owner:** Owner.
+
 ### R27 · Fire OS sideload friction — 6 Low
 - **iOS: resolved.** The owner has a paid Apple Developer account, and TestFlight internal testing is the route. The only routine task is uploading a fresh build at least every 90 days 🟡[P27]. That is an operational step, not a risk, and EAS Build + Submit can automate it ⚪.
 - **Cause (Fire OS):**
@@ -204,6 +221,18 @@
 ### R15 · Android cleartext / local-network permission — 6 Low
 - **Cause:** Cleartext traffic is blocked by default on API 28+. Android 17 adds `ACCESS_LOCAL_NETWORK` for apps targeting API 37 ✅[P19][P20]. This doesn't affect the 4K Max (Fire OS 7/8).
 - **Mitigation:** `usesCleartextTraffic`. Plan the permission flow before raising the target SDK.
+- **Owner:** Lead.
+
+### R28 · A failed log append leaves the adapter ahead of the log — 6 Low
+- **Cause:** The host writes ahead. If `LogStore.append` fails, it records nothing and its state stays as it was. But the adapter has already moved on: it counts the dart, or the takeout, as sent and won't send it again. `createArcadeRuntime` reports the failure only through `onError`. ✅ **sim** (`arcade-runtime.test.ts` pins this)
+- **Impact:** Play goes on with a dart that no turn holds, or a takeout that ended no turn, and nothing is flagged. A full or failing device disk is the likely trigger ⚪.
+- **Today:** No automatic recovery. Only a crash-resume notices: rebuilt from the log, the adapter can't place what was lost, so it infers a takeout. The turn is flagged, play pauses for review, and the board's darts are held as `recovered` ✅ **sim**. Flagged, not silent, but clumsy.
+- **Mitigation plan (Phase 6 hardening):**
+  - Retry the append a few times, with backoff, before giving up.
+  - If it still fails, do what a crash-resume does, at once: stop the source, rebuild its visit state from the persisted log (`rebuildVisitState`, `restore()`) and resync. What was lost then comes back flagged.
+  - Show the failure in W3, not only in `onError`.
+  - Add a failing `LogStore` to the end-to-end chaos suite, with zero silent mismatches as the bar.
+- **Early warning:** `onError` reports carrying an `error` (a thrown append), not a `rejected` result.
 - **Owner:** Lead.
 
 ### R03 · Autodarts ToS: third-party and commercial use — 5 Low (mitigated)
@@ -231,14 +260,6 @@
 - **What happened:** "ludarts" did not exist. The brief predated Autodarts 2.x and conflicted with the native-app requirement.
 - **Mitigation:** Phase 0 verification, the evidence legend, and re-checking 🟡/⚪ items at each gate.
 - **Owner:** Lead.
-
-### R23 · Asset and game-design originality — 4 Low
-- **Cause:** The brief is "inspired by BattleUp". Private use lowers the exposure, but originality is a stated project goal.
-- **Mitigation:**
-  - Original names and mechanics.
-  - A style guide.
-  - An `ASSETS.md` provenance log (author, tool, licence), which also keeps a future public release possible.
-- **Owner:** Owner.
 
 ### R24 · Player personal data — 4 Low
 - **Mitigation:** Data stays on the device. No accounts or analytics. Profiles can be deleted.

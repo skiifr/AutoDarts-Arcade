@@ -26,6 +26,10 @@ import { isLifecycle, relate, takeoutBegins, type Snapshot } from './snapshot';
  * - A dart whose segment cannot be read is reported as a miss with `pendingReview: true`
  *   (§7.3), and the fact carries the anomaly so the adapter can log a correlated
  *   `SourceAnomaly` for diagnostics.
+ * - A new visit whose first darts sit exactly where the last visit's darts were (same
+ *   segment, within `SAME_DART_TOLERANCE`) may be that visit reappearing or new darts in the
+ *   same holes. The tracker cannot tell, so it counts them with `pendingReview: true` and a
+ *   `SourceAnomaly` (decision R): never dropped as a ghost, never counted silently.
  */
 
 export interface KnownDart {
@@ -33,6 +37,11 @@ export interface KnownDart {
   segment: Segment;
   coords?: Coords;
   indexInVisit: number;
+  /**
+   * Counted where a dart of the last ended visit was: it may be that dart reappearing. Its
+   * identity is in doubt, not its reading, so every later fact about it stays `pendingReview`.
+   */
+  suspectedGhost?: true;
 }
 
 export interface VisitState {
@@ -177,7 +186,7 @@ export class VisitTracker {
         this.finishTakeout(out, true);
         this.detectFrom(out, T, 0, true);
       } else {
-        this.detectFrom(out, T, this.adoptGhosts(out, T), false);
+        this.detectFrom(out, T, 0, false, this.flagGhosts(out, T));
       }
     } else if (this.s.inTakeout) {
       this.diffDuringTakeout(snap, out, false);
@@ -242,15 +251,13 @@ export class VisitTracker {
       if (wholeVisitFits) this.finishTakeout(out, true);
       else this.endEmptyTakeout(snap);
     } else if (K.length === 0) {
-      // Nothing known proves the visit went on: a whole visit may have come and gone, unless
-      // these are exactly the last visit's darts (its takeout was called off), or we were not
-      // away long enough for a visit before these darts.
-      const ghosts = this.s.inTakeout ? 0 : this.adoptGhosts(out, T);
-      if (ghosts === 0) {
-        if (wholeVisitFits) this.finishTakeout(out, true);
-        else this.endEmptyTakeout(snap);
-      }
-      this.detectFrom(out, T, ghosts, true);
+      // Nothing known proves the visit went on: a whole visit may have come and gone, unless we
+      // were not away long enough for one. Darts where the last visit's darts were prove nothing
+      // either way: they are counted, flagged.
+      const ghosts = this.s.inTakeout ? 0 : this.ghostCount(T);
+      if (wholeVisitFits) this.finishTakeout(out, true);
+      else this.endEmptyTakeout(snap);
+      this.detectFrom(out, T, 0, true, this.flagGhosts(out, T, ghosts));
     } else if (!this.anchoredResync(T)) {
       this.finishTakeout(out, true);
       this.detectFrom(out, T, 0, true);
@@ -360,32 +367,34 @@ export class VisitTracker {
   }
 
   /**
-   * Darts of an ended visit are back on the list (the board called off a takeout we
-   * already reported). They keep their throw ids and are not counted again.
+   * The first `n` darts of a new visit sit where the last ended visit's darts were. Either the
+   * board put that visit back (a takeout called off after we reported it, or a stale read) or
+   * new darts landed in the same holes; coordinates cannot tell the two apart. Dropping them
+   * would lose real darts silently, so they are counted with `pendingReview` (decision R) and
+   * a person voids them if they were the old darts. Returns the number of darts to flag.
    */
-  private adoptGhosts(out: TrackerFact[], T: readonly NormalizedThrow[]): number {
-    const n = this.ghostCount(T);
+  private flagGhosts(out: TrackerFact[], T: readonly NormalizedThrow[], n = this.ghostCount(T)): number {
     if (n === 0) return 0;
     const prev = this.s.recentVisits[0] as KnownDart[];
     out.push({
       type: 'SourceAnomaly',
       payload: {
-        note: `${n} dart(s) of the previous visit reappeared after its takeout; not counted again`,
+        note: `${n} dart(s) where the previous visit's darts were: counted pending review, in case that visit reappeared after its takeout`,
         rawExcerpt: prev
           .slice(0, n)
           .map((d) => d.segment.label)
           .join(','),
       },
     });
-    for (let i = 0; i < n; i++) this.s.known[i] = { ...copyDart(prev[i] as KnownDart), indexInVisit: i };
     return n;
   }
 
-  private detectFrom(out: TrackerFact[], T: readonly NormalizedThrow[], from: number, recovered: boolean): void {
-    for (let i = from; i < T.length; i++) this.detect(out, T[i] as NormalizedThrow, i, recovered);
+  /** `ghosts`: how many leading darts to flag as possible ghosts (`flagGhosts`). */
+  private detectFrom(out: TrackerFact[], T: readonly NormalizedThrow[], from: number, recovered: boolean, ghosts = 0): void {
+    for (let i = from; i < T.length; i++) this.detect(out, T[i] as NormalizedThrow, i, recovered, i < ghosts);
   }
 
-  private detect(out: TrackerFact[], t: NormalizedThrow, index: number, recovered: boolean): void {
+  private detect(out: TrackerFact[], t: NormalizedThrow, index: number, recovered: boolean, ghost = false): void {
     if (this.s.known[index]) return; // idempotency: this (visitKey, indexInVisit) is taken
     const throwId = this.ids();
     const payload: EventOf<'DartDetected'>['payload'] = {
@@ -396,10 +405,11 @@ export class VisitTracker {
     };
     if (t.coords) payload.coords = t.coords;
     if (recovered) payload.recovered = true;
-    if (t.fatal) payload.pendingReview = true;
+    if (t.fatal || ghost) payload.pendingReview = true;
     out.push(t.fatal ? { type: 'DartDetected', payload, anomaly: t.fatal } : { type: 'DartDetected', payload });
     const known: KnownDart = { throwId, segment: t.segment, indexInVisit: index };
     if (t.coords) known.coords = t.coords;
+    if (ghost) known.suspectedGhost = true;
     this.s.known[index] = known;
   }
 
@@ -410,12 +420,14 @@ export class VisitTracker {
     if (!sameSegment(k.segment, t.segment) || relate(k, t) === 'other') {
       const payload: EventOf<'DartUpdated'>['payload'] = { throwId: k.throwId, previous: k.segment, segment: t.segment };
       if (t.coords) payload.coords = t.coords;
-      if (t.fatal) payload.pendingReview = true;
+      // A re-read settles an unreadable segment, but not whether the dart is a ghost.
+      if (t.fatal || k.suspectedGhost) payload.pendingReview = true;
       out.push(t.fatal ? { type: 'DartUpdated', payload, anomaly: t.fatal } : { type: 'DartUpdated', payload });
     }
     const next: KnownDart = { throwId: k.throwId, segment: t.segment, indexInVisit: k.indexInVisit };
     const coords = t.coords ?? k.coords;
     if (coords) next.coords = coords;
+    if (k.suspectedGhost) next.suspectedGhost = true;
     this.s.known[i] = next;
   }
 

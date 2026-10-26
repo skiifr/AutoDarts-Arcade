@@ -158,6 +158,44 @@ describe('createArcadeRuntime', () => {
     expect(runtime.host.getLog().at(-1)?.type).toBe('TakeoutStarted');
   });
 
+  it('known issue R28: a failed append is reported, the host is unchanged, but the adapter stays ahead of the log', async () => {
+    const { world, inc } = await onlineWorld('append');
+    await inc.runtime.command('StartSession', COUNTDOWN);
+    const append = world.store.append.bind(world.store);
+    world.store.append = async () => {
+      throw new Error('disk full');
+    };
+    world.board.throwDart({ segment: 'T20' });
+    await world.sched.advance(100);
+    await inc.runtime.whenIdle();
+    expect(inc.errors).toContain('DartDetected: Error: disk full');
+    world.store.append = append;
+    world.board.throwDart({ segment: 'S5' });
+    await world.sched.advance(100);
+    await inc.runtime.whenIdle();
+    // The log and the turn hold only the second dart; the adapter knows both and will not resend the first.
+    expect(inc.runtime.getSnapshot()!.turns[0]!.darts.map((d) => d.segment.label)).toEqual(['S5']);
+    expect(inc.adapter.visitState().known.map((k) => k.segment.label)).toEqual(['T20', 'S5']);
+
+    // A crash-resume rebuilds the adapter from the log. It cannot place the lost T20, so it
+    // infers a takeout: the turn is flagged, play pauses for review, and the board's darts are
+    // held as recovered for the next turn. Flagged, never silent, but not tidy.
+    const sessionId = inc.runtime.getSnapshot()!.sessionId;
+    inc.runtime.stop();
+    const next = incarnate(world, 1);
+    await next.runtime.resumeSession(sessionId);
+    next.runtime.start();
+    await world.sched.advance(200);
+    await next.runtime.whenIdle();
+    const s = next.runtime.getSnapshot()!;
+    expect(s.phase).toBe('awaiting-review');
+    expect(s.turns[0]!.needsReview).toBe(true);
+    expect(s.heldDarts.map((d) => [d.segment.label, d.recovered])).toEqual([
+      ['T20', true],
+      ['S5', true],
+    ]);
+  });
+
   it('works with the simulator and with manual play (no board)', async () => {
     const world = makeWorld('sim');
     const sim = new SimulatorSource({ scheduler: world.sched, clock: world.clock, ids: incIds(), random: seededRandom('sim') });
