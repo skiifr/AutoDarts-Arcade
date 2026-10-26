@@ -19,10 +19,10 @@ import {
   type RandomSource,
   type TimerHandle,
 } from '@arcade/adapters';
-import { MemoryLogStore, gameRegistry, ulidFromNumber, type GameRegistry, type HostResult } from '@arcade/engine';
-import type { BoardFactDraft, PlayerRef } from '@arcade/event-schema';
+import { MemoryLogStore, gameRegistry, ulidFromNumber, type GameRegistry, type HostResult, type LogStore } from '@arcade/engine';
+import type { ArcadeEvent, BoardFactDraft, PlayerRef } from '@arcade/event-schema';
 import { GAMES } from '@arcade/games';
-import { createArcadeRuntime, type ArcadeRuntime } from '../arcade-runtime';
+import { createArcadeRuntime, type ArcadeRuntime, type RuntimeProblem } from '../arcade-runtime';
 
 export const EPOCH = SIM_EPOCH_MS;
 export const REGISTRY: GameRegistry = gameRegistry(GAMES);
@@ -34,12 +34,53 @@ export const REGISTRY: GameRegistry = gameRegistry(GAMES);
  */
 export const SIM_MIN_VISIT_MS = MIN_UNSEEN_VISIT_MS + 1000;
 
+/**
+ * A `LogStore` over another that refuses chosen appends, as a full disk or a busy database
+ * would. A refused append stores nothing (the `LogStore` contract).
+ */
+export class FlakyLogStore implements LogStore {
+  /** Refuse the next n appends. */
+  failNext = 0;
+  /** Refuse every append this returns true for. */
+  failIf: ((events: readonly ArcadeEvent[]) => boolean) | null = null;
+  /** Refuse each append with this probability. */
+  failRate = 0;
+  /** Appends refused so far. */
+  refused = 0;
+  readonly inner: LogStore;
+  private readonly random: RandomSource;
+
+  constructor(inner: LogStore, random: RandomSource) {
+    this.inner = inner;
+    this.random = random;
+  }
+
+  async append(sessionId: string, events: readonly ArcadeEvent[]): Promise<void> {
+    const fail = this.failNext > 0 || (this.failIf?.(events) ?? false) || (this.failRate > 0 && this.random() < this.failRate);
+    if (fail) {
+      if (this.failNext > 0) this.failNext--;
+      this.refused++;
+      throw new Error('SQLITE_FULL: database or disk is full');
+    }
+    await this.inner.append(sessionId, events);
+  }
+
+  load(sessionId: string): Promise<ArcadeEvent[]> {
+    return this.inner.load(sessionId);
+  }
+
+  listSessions(): Promise<{ sessionId: string; lastSeq: number; closed: boolean }[]> {
+    return this.inner.listSessions();
+  }
+}
+
 export interface World {
   seed: string;
   sched: VirtualScheduler;
   board: BoardModel;
   transport: FakeBoardTransport;
-  store: MemoryLogStore;
+  /** The device's log storage: survives a crash, and can be made to refuse appends. */
+  store: FlakyLogStore;
   clock: () => string;
   /** Simulated ms of an ISO time from `clock`. */
   simMs(iso: string): number;
@@ -54,7 +95,7 @@ export function makeWorld(seed: string, options: { faults?: FaultPlan; board?: P
     sched,
     board,
     transport,
-    store: new MemoryLogStore(),
+    store: new FlakyLogStore(new MemoryLogStore(), seededRandom(`store:${seed}`)),
     clock: () => isoFromEpochMs(EPOCH + sched.now()),
     simMs: (iso) => (epochMsFromIso(iso) ?? NaN) - EPOCH,
   };
@@ -65,8 +106,14 @@ export interface Incarnation {
   runtime: ArcadeRuntime;
   /** Every fact the adapter emitted, in order. */
   facts: BoardFactDraft[];
-  /** Problems the runtime reported (refused or unpersisted facts). */
+  /** Problems the runtime reported that it could not recover from: refused facts, lost facts. */
   errors: string[];
+  /** Every problem the runtime reported, recovered or not. */
+  problems: RuntimeProblem[];
+}
+
+function describeProblem(p: RuntimeProblem): string {
+  return `${p.fact?.type ?? p.command?.type}: ${p.result?.status === 'rejected' ? p.result.message : String(p.error)}`;
 }
 
 /** One launch of the app on the world. `n` keeps each launch's ids apart. */
@@ -82,6 +129,7 @@ export function incarnate(world: World, n: number, options: { stateOnlySocket?: 
   });
   const facts: BoardFactDraft[] = [];
   const errors: string[] = [];
+  const problems: RuntimeProblem[] = [];
   adapter.subscribe((f) => facts.push(f));
   const runtime = createArcadeRuntime({
     source: adapter,
@@ -89,9 +137,13 @@ export function incarnate(world: World, n: number, options: { stateOnlySocket?: 
     games: REGISTRY,
     clock: world.clock,
     ids,
-    onError: (p) => errors.push(`${p.fact?.type ?? p.command?.type}: ${p.result?.status === 'rejected' ? p.result.message : String(p.error)}`),
+    scheduler: world.sched,
+    onError: (p) => {
+      problems.push(p);
+      if (p.recovery === undefined || p.recovery === 'none') errors.push(describeProblem(p));
+    },
   });
-  return { adapter, runtime, facts, errors };
+  return { adapter, runtime, facts, errors, problems };
 }
 
 export function makePlayers(n: number): PlayerRef[] {
