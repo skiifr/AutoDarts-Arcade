@@ -2,16 +2,17 @@
 
 One Expo + React Native codebase for **iPhone, iPad, Android and the Fire TV Stick 4K Max** (versions in [ADR-003](../../docs/adr/0003-client-stack-versions.md)).
 
-> **Shell build.** Every screen from the wireframes (ARCHITECTURE §10) is here, driven by **demo darts**.
-> - Scoring is a placeholder points sum (`src/shell/demo-session.ts`).
-> - The real game engine arrives in Phase 3 and the live board connection in Phase 2.
-> - Nothing in this build talks to your board.
+> **Shell build with a live board check.** Every screen from the wireframes (ARCHITECTURE §10) is here.
+> - The games (W1–W5) still run on **demo darts**, with a placeholder points sum (`src/shell/demo-session.ts`). The game engine is wired in later.
+> - W0 connects to a real board, and the **dart ticker** (`/ticker`) shows what it reports, raw. This is the first end-to-end check of the live adapter.
+> - The app only ever **reads** from the board: `GET /api/state`, `/api/version`, `/api/state/stats`, `/api/cams/stats` and the events WebSocket, at a private-network address. The platform transport enforces both.
 
 ## Screens
 
 | Route | Wireframe | What works |
 |---|---|---|
-| `/` | W0 Connect | Demo mode; address field (connect is disabled until Phase 2) |
+| `/` | W0 Connect | Last-known board offered on launch; address entry (private addresses only, port 3180 unless you add one) with **Connect** showing the connection state and retry count; opt-in **Scan network** of a /24 with progress; demo mode. iOS: a one-time Local Network note before the first connect or scan, and one retry after the prompt |
+| `/ticker` | Dart ticker | Connection state, board status, board version, camera FPS (health sampler: once when online, then every 30 s), the current visit's darts as large chips, the previous visit, and the last 30 board facts with time, type and summary. **Recovered** darts and **inferred** takeouts are marked. **Disconnect**, or Back, closes the connection |
 | `/games` | W1 Game select | Categories, focusable tiles, details panel |
 | `/setup?game=…` | W2 Player setup | Add, remove and reorder players; option steppers; start |
 | `/play` | W3 Live gameplay | Standings, darts pinned on the board, turn panel, takeout / offline / review / stuck banners, pause menu, demo throw / board clear / autoplay |
@@ -27,6 +28,25 @@ yarn install
 yarn web                   # browser preview (Expo dev server)
 yarn verify                # lint + typecheck + unit tests
 ```
+
+### Against the fake board
+
+No board needed: the [fake board](../devtools/fake-board/README.md) serves the same read-only API from your computer.
+
+```sh
+yarn fake-board --port 3180 --scenario random-play   # terminal 1
+yarn web                                            # terminal 2, then open http://localhost:8081
+```
+
+On W0, enter `127.0.0.1` and press **Connect**. The ticker follows the simulated darts. Stop and restart the fake board to watch the ticker go offline, retry and recover.
+
+From a phone or Fire TV running a native build, enter the computer's LAN address instead (the fake board listens on all interfaces).
+
+**The browser preview works only with the fake board.** In a browser, the app's requests to the board are cross-origin, and browsers enforce CORS. The fake board sends permissive CORS headers. A real Autodarts board probably sends none, so a browser can't read it. **To use a real board, run a native build** (Android, Fire TV or iOS, below): native apps are not subject to CORS.
+
+Settings such as the last-known board address are kept in expo-sqlite's key-value store on devices, and in `localStorage` in the browser preview.
+
+### TV treatment in the browser
 
 In the browser, add **`?input=remote`** to the URL to get the TV treatment: focus ring and 5% overscan margins.
 - Arrow keys and Enter act as the D-pad **only on the Fix (W4) dartboard picker**.
