@@ -269,7 +269,10 @@ export class Decider {
           return;
         }
         if (!f.active) reject('no-active-turn', 'no turn is in progress');
-        this.endTurn({ ...base, reason: 'manual-skip', pad: false, flag: false, reviewPause: false });
+        // "Next player" after darts typed in by hand states the visit is over, as a takeout
+        // would: pad it like an observed one. With board darts in it, nothing changes.
+        const pad = f.manualVisit(f.active);
+        this.endTurn({ ...base, reason: 'manual-skip', pad, flag: false, reviewPause: false });
         return;
       }
       case 'Pause':

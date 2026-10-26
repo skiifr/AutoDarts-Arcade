@@ -65,7 +65,10 @@ export interface TurnRecord {
     seq: number;
     reason: TurnEndReason;
     needsReview: boolean;
-    /** Ended by an observed takeout with missingDartsAreMisses on, so the visit is kept at 3 darts. */
+    /**
+     * Ended by an observed takeout, or a manual visit by "Next player", with missingDartsAreMisses
+     * on, so the visit is kept at 3 darts.
+     */
     paddingApplies: boolean;
   } | null;
   reviewed: boolean;
@@ -239,6 +242,22 @@ export class SessionFolder {
     let n = 0;
     for (const d of turn.entries) if (d.voided === null) n++;
     return n;
+  }
+
+  /**
+   * A visit entered by hand (manual mode): every dart in it, padding aside, came from
+   * `AddDart{reason:'manual-mode'}`. A visit with no darts counts only while no board has
+   * reported in this session, so "Next player" on a board-mode turn the board saw nothing
+   * of stays a plain skip.
+   */
+  manualVisit(turn: TurnRecord): boolean {
+    let darts = 0;
+    for (const d of turn.entries) {
+      if (d.padded) continue;
+      if (d.origin !== 'manual-mode') return false;
+      darts++;
+    }
+    return darts > 0 || this.connection === 'unknown';
   }
 
   /** Before the first turn: live board darts that were on the board when the game started. */
@@ -521,10 +540,9 @@ export class SessionFolder {
       reason: p.reason,
       needsReview: p.needsReview === true,
       paddingApplies:
-        p.reason === 'takeout' &&
-        cause?.kind === 'takeout' &&
-        !cause.inferred &&
-        this.started.payload.houseRules.missingDartsAreMisses,
+        this.started.payload.houseRules.missingDartsAreMisses &&
+        ((p.reason === 'takeout' && cause?.kind === 'takeout' && !cause.inferred) ||
+          (p.reason === 'manual-skip' && cause === undefined && this.manualVisit(turn))),
     };
     if (p.needsReview) this.unreviewed.add(turn.turnIndex);
     if (e.causationId !== undefined && cause !== undefined) this.consumedEnds.add(e.causationId);

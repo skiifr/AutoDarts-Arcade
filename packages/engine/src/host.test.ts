@@ -62,7 +62,8 @@ describe('SessionHost: log and identity', () => {
     const rig = await started();
     const skip = rig.cmd.skip();
     const [r] = await rig.run(skip);
-    expect(types(r)).toEqual(['TurnEnded', 'TurnStarted']);
+    // No board has reported, so this is a manual visit: "Next player" pads it.
+    expect(types(r)).toEqual(['DartAdded', 'DartAdded', 'DartAdded', 'TurnEnded', 'TurnStarted']);
     for (const e of r!.status === 'applied' ? r!.events : []) expect(e.causationId).toBe(skip.commandId);
   });
 });

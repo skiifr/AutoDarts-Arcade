@@ -148,7 +148,7 @@ describe('turn policy (ARCHITECTURE §8.3, §6.3)', () => {
     expect(s.view).toEqual({ scores: { [A.playerId]: 25, [B.playerId]: 0 } });
   });
 
-  it('manual mode: AddDart{manual-mode} scores live and SkipTurn ("Next player") ends the turn without padding', async () => {
+  it('manual mode: AddDart{manual-mode} scores live and SkipTurn ("Next player") ends the turn, padding it with misses', async () => {
     const rig = await started('test-sum');
     const { cmd } = rig;
     const effects: string[] = [];
@@ -158,11 +158,51 @@ describe('turn policy (ARCHITECTURE §8.3, §6.3)', () => {
       cmd.add(A.playerId, 0, 1, S5, 'manual-mode'),
       cmd.skip(),
     );
-    expect(out.map(types)).toEqual([['DartAdded'], ['DartAdded'], ['TurnEnded', 'TurnStarted']]);
+    expect(out.map(types)).toEqual([['DartAdded'], ['DartAdded'], ['DartAdded', 'TurnEnded', 'TurnStarted']]);
     expect(find(out[2], 'TurnEnded')[0]!.payload.reason).toBe('manual-skip');
-    expect(labels(rig, 0)).toEqual(['T20', 'S5']);
+    expect(find(out[2], 'DartAdded')[0]!.payload).toMatchObject({ dartIndex: 2, segment: MISS, reason: 'undetected' });
+    expect(labels(rig, 0)).toEqual(['T20', 'S5', 'MISS']);
+    expect(rig.host.getSnapshot()!.turns[0]!.darts.map((d) => d.padded)).toEqual([false, false, true]);
     expect(effects).toEqual(['big-hit', 'hit']);
     expect(rig.host.getSnapshot()!.currentPlayerId).toBe(B.playerId);
+  });
+
+  it('manual mode: "Next player" with no darts records three misses; a full visit gets none; voiding re-pads', async () => {
+    const rig = await started('test-sum');
+    const { cmd } = rig;
+    const [skip] = await rig.run(cmd.skip());
+    expect(types(skip)).toEqual(['DartAdded', 'DartAdded', 'DartAdded', 'TurnEnded', 'TurnStarted']);
+    const full = await rig.run(
+      cmd.add(B.playerId, 1, 0, S1, 'manual-mode'),
+      cmd.add(B.playerId, 1, 1, S2, 'manual-mode'),
+      cmd.add(B.playerId, 1, 2, S3, 'manual-mode'),
+      cmd.skip(),
+    );
+    expect(types(full[3])).toEqual(['TurnEnded', 'TurnStarted']);
+    const mid = rig.host.getSnapshot()!.turns[1]!.darts[1]!;
+    const [v] = await rig.run(cmd.void(mid.throwId));
+    expect(types(v)).toEqual(['DartVoided', 'DartAdded']);
+    expect(labels(rig, 1)).toEqual(['S1', 'S3', 'MISS']);
+  });
+
+  it('manual mode pads only with missingDartsAreMisses; board-mode "Next player" never pads', async () => {
+    const off = await started('test-sum', [A, B], {}, { missingDartsAreMisses: false, emptyTakeoutSkipsTurn: false });
+    const [, offSkip] = await off.run(off.cmd.add(A.playerId, 0, 0, T20, 'manual-mode'), off.cmd.skip());
+    expect(types(offSkip)).toEqual(['TurnEnded', 'TurnStarted']);
+
+    const rig = await started('test-sum');
+    const { board, cmd } = rig;
+    // A board dart in the visit: a plain skip, as before.
+    const [, mixed] = await rig.run(board.dart(S20), cmd.add(A.playerId, 0, 1, S5, 'manual-mode'));
+    expect(types(mixed)).toEqual(['DartAdded']);
+    const [skipBoard] = await rig.run(cmd.skip());
+    expect(types(skipBoard)).toEqual(['TurnEnded', 'TurnStarted']);
+    // Once a board has reported, an empty "Next player" is a plain skip too.
+    const [, emptySkip] = await rig.run(board.connection('online'), cmd.skip());
+    expect(types(emptySkip)).toEqual(['TurnEnded', 'TurnStarted']);
+    // And an inferred takeout still never pads, manual darts or not.
+    const [, inferred] = await rig.run(cmd.add(A.playerId, 2, 0, S1, 'manual-mode'), board.takeout({ inferred: true }));
+    expect(types(inferred)).toEqual(['TakeoutFinished', 'TurnEnded', 'GamePaused']);
   });
 
   it('records board updates as source-update corrections; a person’s correction wins over a later update', async () => {
