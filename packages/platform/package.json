@@ -12,5 +12,8 @@
   },
   "peerDependencies": {
     "expo-sqlite": "*"
+  },
+  "devDependencies": {
+    "@arcade/games": "*"
   }
 }

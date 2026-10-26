@@ -6,6 +6,7 @@
 export * from './address';
 export * from './transport';
 export * from './runtime';
+export * from './arcade-runtime';
 export * from './discovery';
 export * from './board';
 export * from './log-store/memory';

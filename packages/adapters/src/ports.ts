@@ -1,4 +1,5 @@
 import type { BoardFactDraft } from '@arcade/event-schema';
+import type { RestoredVisitState } from './autodarts-local/rebuild';
 import type { BoardGetPath } from './endpoints';
 
 /**
@@ -68,6 +69,13 @@ export interface BoardSource {
   stop(): void;
   /** Returns an unsubscribe function. */
   subscribe(listener: FactListener): () => void;
+  /** Re-read the board now (the app came back to the foreground). Sources without a board omit it. */
+  resync?(): void;
+  /**
+   * Crash-resume: continue from the visit state rebuilt from the session's log
+   * (`rebuildVisitState`). Called while stopped. Sources without visit state omit it.
+   */
+  restore?(state: RestoredVisitState): void;
 }
 
 /** Reports an error outside the current call stack (as an uncaught error), without unwinding it. */
