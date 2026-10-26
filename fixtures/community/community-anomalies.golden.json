@@ -1,0 +1,292 @@
+[
+  {
+    "type": "SourceConnectionChanged",
+    "payload": {
+      "state": "connecting",
+      "attempt": 1
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0"
+    },
+    "occurredAt": "2026-11-02T20:00:00.000Z"
+  },
+  {
+    "type": "SourceConnectionChanged",
+    "payload": {
+      "state": "resyncing",
+      "attempt": 1
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:00.001Z"
+  },
+  {
+    "type": "BoardStatusChanged",
+    "payload": {
+      "status": "ready"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:00.001Z",
+    "correlationId": "01M6EXHSG1V20K44ND3XGVT4JD"
+  },
+  {
+    "type": "SourceConnectionChanged",
+    "payload": {
+      "state": "online"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:00.001Z"
+  },
+  {
+    "type": "SourceAnomaly",
+    "payload": {
+      "note": "unknown segment name \"X9\"",
+      "rawExcerpt": "{\"connected\":true,\"running\":true,\"status\":\"Throw\",\"event\":\"Throw detected\",\"numThrows\":1,\"throws\":[{\"bouncer\":false,\"coords\":{\"x\":0.33,\"y\":0.12},\"segment\":{\"name\":\"X9\",\"number\":40,\"multiplier\":7}}]}"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:00.251Z"
+  },
+  {
+    "type": "SourceAnomaly",
+    "payload": {
+      "note": "unreadable segment (multiplier 7); counted as a miss pending review",
+      "rawExcerpt": "{\"bouncer\":false,\"coords\":{\"x\":0.33,\"y\":0.12},\"segment\":{\"name\":\"X9\",\"number\":40,\"multiplier\":7}}"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:00.251Z",
+    "correlationId": "01M6EXHSQV26JY7XQBWCMSNN0Z"
+  },
+  {
+    "type": "DartDetected",
+    "payload": {
+      "throwId": "01M6EXHSQV26JY7XQBWCMSNN0Y",
+      "segment": {
+        "number": 0,
+        "multiplier": 0,
+        "bed": "miss",
+        "label": "MISS"
+      },
+      "visitKey": "01M6EXHSG0XFT5XEQ9AQC0TKA2",
+      "indexInVisit": 0,
+      "coords": {
+        "x": 0.33,
+        "y": 0.12
+      }
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:00.251Z",
+    "correlationId": "01M6EXHSQV26JY7XQBWCMSNN0Z"
+  },
+  {
+    "type": "BoardStatusChanged",
+    "payload": {
+      "status": "throwing"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:00.251Z"
+  },
+  {
+    "type": "SourceAnomaly",
+    "payload": {
+      "note": "unknown bed \"TripleOuter\"",
+      "rawExcerpt": "{\"connected\":true,\"running\":true,\"status\":\"Throw\",\"event\":\"Throw detected\",\"numThrows\":2,\"throws\":[{\"bouncer\":false,\"coords\":{\"x\":0.33,\"y\":0.12},\"segment\":{\"name\":\"X9\",\"number\":40,\"multiplier\":7}},{\"bouncer\":false,\"coords\":{\"x\":-0.4012,\"y\":-0.4203},\"segment\":{\"bed\":\"TripleOuter\",\"multiplier\":3,\"name\":\"T19\",\"number\":19}}]}"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:00.501Z"
+  },
+  {
+    "type": "DartDetected",
+    "payload": {
+      "throwId": "01M6EXHSZN08DE4HTX4PJ8HT28",
+      "segment": {
+        "number": 19,
+        "multiplier": 3,
+        "bed": "triple",
+        "label": "T19"
+      },
+      "visitKey": "01M6EXHSG0XFT5XEQ9AQC0TKA2",
+      "indexInVisit": 1,
+      "coords": {
+        "x": -0.4012,
+        "y": -0.4203
+      }
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:00.501Z"
+  },
+  {
+    "type": "SourceAnomaly",
+    "payload": {
+      "note": "bouncer: true observed",
+      "rawExcerpt": "{\"connected\":true,\"running\":true,\"status\":\"Takeout\",\"event\":\"Throw detected\",\"numThrows\":3,\"throws\":[{\"bouncer\":false,\"coords\":{\"x\":0.33,\"y\":0.12},\"segment\":{\"name\":\"X9\",\"number\":40,\"multiplier\":7}},{\"bouncer\":false,\"coords\":{\"x\":-0.4012,\"y\":-0.4203},\"segment\":{\"bed\":\"TripleOuter\",\"multiplier\":3,\"name\":\"T19\",\"number\":19}},{\"bouncer\":true,\"coords\":{\"x\":0.2803,\"y\":-0.7421},\"segment\":{\"bed\":\"SingleOuter\",\"multiplier\":1,\"name\":\"S3\",\"number\":3}}]}"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:01.001Z"
+  },
+  {
+    "type": "DartDetected",
+    "payload": {
+      "throwId": "01M6EXHTF99SPHTCE9HY1X563Q",
+      "segment": {
+        "number": 3,
+        "multiplier": 1,
+        "bed": "single-outer",
+        "label": "S3"
+      },
+      "visitKey": "01M6EXHSG0XFT5XEQ9AQC0TKA2",
+      "indexInVisit": 2,
+      "coords": {
+        "x": 0.2803,
+        "y": -0.7421
+      }
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:01.001Z"
+  },
+  {
+    "type": "BoardStatusChanged",
+    "payload": {
+      "status": "takeout"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:01.001Z"
+  },
+  {
+    "type": "DartUpdated",
+    "payload": {
+      "throwId": "01M6EXHTF99SPHTCE9HY1X563Q",
+      "previous": {
+        "number": 3,
+        "multiplier": 1,
+        "bed": "single-outer",
+        "label": "S3"
+      },
+      "segment": {
+        "number": 3,
+        "multiplier": 2,
+        "bed": "double",
+        "label": "D3"
+      },
+      "coords": {
+        "x": 0.2911,
+        "y": -0.7699
+      }
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:01.251Z"
+  },
+  {
+    "type": "SourceAnomaly",
+    "payload": {
+      "note": "unknown board status \"Hibernating\"",
+      "rawExcerpt": "Hibernating"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:01.501Z"
+  },
+  {
+    "type": "SourceAnomaly",
+    "payload": {
+      "note": "invalid state: throws: Invalid input: expected array, received string",
+      "rawExcerpt": "{\"type\":\"state\",\"data\":{\"status\":\"Throw\",\"throws\":\"T20\"}}"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:01.751Z"
+  },
+  {
+    "type": "TakeoutStarted",
+    "payload": {
+      "visitKey": "01M6EXHSG0XFT5XEQ9AQC0TKA2"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:02.001Z"
+  },
+  {
+    "type": "TakeoutFinished",
+    "payload": {
+      "visitKey": "01M6EXHSG0XFT5XEQ9AQC0TKA2"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:02.251Z"
+  },
+  {
+    "type": "BoardStatusChanged",
+    "payload": {
+      "status": "ready"
+    },
+    "source": {
+      "kind": "autodarts-local",
+      "adapterVersion": "autodarts-local@0.1.0",
+      "upstreamVersion": "2.0.2"
+    },
+    "occurredAt": "2026-11-02T20:00:02.251Z"
+  }
+]
