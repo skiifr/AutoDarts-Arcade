@@ -62,8 +62,42 @@ describe('SessionHost: log and identity', () => {
     const rig = await started();
     const skip = rig.cmd.skip();
     const [r] = await rig.run(skip);
-    expect(types(r)).toEqual(['TurnEnded', 'TurnStarted']);
+    // No board has reported, so this is a manual visit: "Next player" pads it.
+    expect(types(r)).toEqual(['DartAdded', 'DartAdded', 'DartAdded', 'TurnEnded', 'TurnStarted']);
     for (const e of r!.status === 'applied' ? r!.events : []) expect(e.causationId).toBe(skip.commandId);
+  });
+});
+
+describe('SessionHost: the game seed', () => {
+  it('uses StartSession.rngSeed when given, so the game draws the same random stream every time', async () => {
+    const draws = async (seed: string | undefined) => {
+      const rig = makeRig();
+      const [r] = await rig.run(rig.cmd.start('test-lucky', [A, B], { rounds: 2 }, undefined, seed));
+      expect(r!.status).toBe('applied');
+      for (let i = 0; i < 4; i++) await rig.run(rig.board.dart(S20), rig.board.takeout());
+      const s = rig.host.getSnapshot()!;
+      return { seed: s.rngSeed, lucky: (s.gameState as { luckyHistory: number[] }).luckyHistory };
+    };
+    const a = await draws('demo-seed-1');
+    const b = await draws('demo-seed-1');
+    expect(a.seed).toBe('demo-seed-1');
+    expect(b).toEqual(a);
+    expect(a.lucky).toHaveLength(5);
+    expect((await draws('demo-seed-2')).lucky).not.toEqual(a.lucky);
+  });
+
+  it('mints a fresh seed when StartSession has none', async () => {
+    const rig = makeRig();
+    const [r] = await rig.run(rig.cmd.start('test-sum', [A, B]));
+    const started = r!.status === 'applied' ? r!.events[0]! : undefined;
+    expect(started?.type === 'SessionStarted' && started.payload.rngSeed).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(started?.type === 'SessionStarted' && started.payload.rngSeed).not.toBe(started?.sessionId);
+  });
+
+  it('refuses an empty seed', async () => {
+    const rig = makeRig();
+    const [r] = await rig.run(rig.cmd.start('test-sum', [A, B], {}, undefined, ''));
+    expect(r).toMatchObject({ status: 'rejected', reason: 'invalid' });
   });
 });
 

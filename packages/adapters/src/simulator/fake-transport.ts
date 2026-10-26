@@ -14,6 +14,12 @@ export interface FaultPlan {
   reorder?: number;
   /** Close the socket after this many delivered frames (like the fault proxy's --cut-every). */
   cutEvery?: number;
+  /**
+   * A dropped frame also breaks the socket, 0–300 ms later. A TCP stream cannot skip data: on a
+   * real network a frame is only lost with the connection it was on. Without this, `drop` loses
+   * frames from a socket that stays healthy (a stress test of the self-healing poll).
+   */
+  dropBreaksSocket?: boolean;
 }
 
 export interface FakeTransportOptions {
@@ -176,7 +182,16 @@ export class FakeBoardTransport implements Transport {
     if (this.silent) return;
     if (stateOnly && !text.startsWith('{"type":"state"')) return;
     const f = this.faults;
-    if (f.drop !== undefined && this.random() < f.drop) return;
+    if (f.drop !== undefined && this.random() < f.drop) {
+      if (f.dropBreaksSocket) {
+        const timer = this.scheduler.setTimeout(() => {
+          sock.pending.delete(timer);
+          this.closeSocket(sock, { code: 1006, error: 'connection lost' });
+        }, this.random() * 300);
+        sock.pending.add(timer);
+      }
+      return;
+    }
     const copies = f.duplicate !== undefined && this.random() < f.duplicate ? 2 : 1;
     for (let c = 0; c < copies; c++) {
       const now = this.scheduler.now();

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { d, manualReset, show, snap, takeoutFinished, takeoutStarted, throwing, tracker } from '../testing/snapshots';
 import type { Snapshot } from './snapshot';
-import type { ApplyMode, VisitTracker } from './visit-tracker';
+import { MIN_UNSEEN_VISIT_MS, type ApplyMode, type VisitTracker } from './visit-tracker';
 
 const A = d('T20', 0.0303, 0.6166);
 const B = d('T20', 0.0002, 0.6127);
@@ -17,8 +17,8 @@ function online(): VisitTracker {
   return t;
 }
 
-function step(t: VisitTracker, s: Snapshot, mode: ApplyMode = 'live'): string[] {
-  return show(t.apply(s, mode));
+function step(t: VisitTracker, s: Snapshot, mode: ApplyMode = 'live', awayMs?: number): string[] {
+  return show(t.apply(s, mode, awayMs));
 }
 
 describe('§6.2 snapshot diff (live)', () => {
@@ -189,11 +189,26 @@ describe('§6.2 snapshot diff (live)', () => {
     expect(step(t, s)).toEqual(['detect 0:T20', 'detect 1:T20', 'detect 2:T5']);
   });
 
-  it('an unreadable dart is a miss with an anomaly attached', () => {
+  it('an unreadable dart is a miss pending review, with an anomaly attached', () => {
     const t = online();
     const s = snap('Throw', 'Throw detected');
     s.throws.push({ segment: { number: 0, multiplier: 0, bed: 'miss', label: 'MISS' }, fatal: { note: 'x', rawExcerpt: '{}' }, notes: [] });
-    expect(step(t, s)).toEqual(['detect 0:MISS anomaly']);
+    const [fact] = t.apply(s, 'live');
+    expect(show([fact!])).toEqual(['detect 0:MISS anomaly']);
+    expect(fact?.type === 'DartDetected' && fact.payload.pendingReview).toBe(true);
+    // A readable dart carries no flag.
+    const [next] = t.apply(throwing(A, A), 'live').filter((f) => f.type === 'DartDetected');
+    expect(next?.type === 'DartDetected' && next.payload.pendingReview).toBeUndefined();
+  });
+
+  it('a dart re-read as unreadable is updated to a miss pending review', () => {
+    const t = online();
+    step(t, throwing(C));
+    const s = snap('Throw', 'Throw detected');
+    s.throws.push({ segment: { number: 0, multiplier: 0, bed: 'miss', label: 'MISS' }, coords: C.coords, fatal: { note: 'x', rawExcerpt: '{}' }, notes: [] });
+    const [fact] = t.apply(s, 'live');
+    expect(show([fact!])).toEqual(['update T5->MISS']);
+    expect(fact?.type === 'DartUpdated' && fact.payload.pendingReview).toBe(true);
   });
 });
 
@@ -224,7 +239,7 @@ describe('§6.4 resync and decision R', () => {
     expect(step(t, takeoutFinished(), 'resync')).toEqual(['takeout-end inferred']);
   });
 
-  it('empty with nothing known: a takeout may still have happened, inferred', () => {
+  it('empty with nothing known, after an outage of unknown length: a takeout may have happened, inferred', () => {
     const t = online();
     expect(step(t, takeoutFinished(), 'resync')).toEqual(['takeout-end inferred']);
   });
@@ -234,7 +249,7 @@ describe('§6.4 resync and decision R', () => {
     expect(step(t, throwing(E, F), 'resync')).toEqual(['takeout-end inferred', 'detect 0:S12 recovered', 'detect 1:MISS recovered']);
   });
 
-  it('nothing known and darts present: a whole visit may have passed, inferred', () => {
+  it('nothing known and darts present, after an outage of unknown length: a whole visit may have passed, inferred', () => {
     const t = online();
     expect(step(t, throwing(E), 'resync')).toEqual(['takeout-end inferred', 'detect 0:S12 recovered']);
   });
@@ -272,6 +287,68 @@ describe('§6.4 resync and decision R', () => {
     step(t, takeoutStarted(A, B));
     step(t, takeoutFinished());
     expect(step(t, throwing(A, B, C), 'resync')).toEqual(['anomaly', 'detect 2:T5 recovered']);
+  });
+});
+
+describe('Wi-Fi blips: a takeout is inferred only when the board was away long enough for one', () => {
+  const S = MIN_UNSEEN_VISIT_MS;
+  const nothingKnown = () => online();
+  const nothingKnownInEmptyTakeout = () => {
+    const t = online();
+    step(t, takeoutStarted()); // a hand in front of the cameras, seen to start
+    return t;
+  };
+  const known = () => {
+    const t = online();
+    step(t, throwing(A));
+    return t;
+  };
+
+  it.each([
+    // [situation, tracker, snapshot, away ms, facts]
+    ['nothing known, empty board, blip', nothingKnown, takeoutFinished(), 2000, []],
+    ['nothing known, empty board, just under the threshold', nothingKnown, takeoutFinished(), S - 1, []],
+    ['nothing known, empty board, at the threshold', nothingKnown, takeoutFinished(), S, ['takeout-end inferred']],
+    ['nothing known, empty board, long outage', nothingKnown, takeoutFinished(), 60_000, ['takeout-end inferred']],
+    ['nothing known, empty board, unknown outage', nothingKnown, takeoutFinished(), undefined, ['takeout-end inferred']],
+    ['nothing known, a dart thrown in a blip: same visit', nothingKnown, throwing(E), S - 1, ['detect 0:S12 recovered']],
+    ['nothing known, a dart after a long outage', nothingKnown, throwing(E), S, ['takeout-end inferred', 'detect 0:S12 recovered']],
+    ['empty takeout seen to start, over after a blip: nothing', nothingKnownInEmptyTakeout, takeoutFinished(), S - 1, []],
+    ['empty takeout seen to start, a dart after a blip', nothingKnownInEmptyTakeout, throwing(E), S - 1, ['detect 0:S12 recovered']],
+    ['empty takeout seen to start, over after a long outage', nothingKnownInEmptyTakeout, takeoutFinished(), S, ['takeout-end inferred']],
+    ['known darts missing, the shortest blip', known, takeoutFinished(), 1, ['takeout-end inferred']],
+    ['known darts missing, long outage', known, takeoutFinished(), 60_000, ['takeout-end inferred']],
+    ['known darts replaced, blip', known, throwing(E), 1, ['takeout-end inferred', 'detect 0:S12 recovered']],
+    ['known darts still there, more thrown, long outage', known, throwing(A, B), 60_000, ['detect 1:T20 recovered']],
+  ] as const)('%s', (_label, make, snapshot, away, facts) => {
+    const t = make();
+    expect(step(t, snapshot, 'resync', away)).toEqual(facts);
+  });
+
+  it('a short outage leaves the visit as it was, so its later darts and takeout are plain live facts', () => {
+    const t = online();
+    expect(step(t, takeoutFinished(), 'resync', 1500)).toEqual([]);
+    const key = t.state().visitKey;
+    expect(step(t, throwing(A))).toEqual(['detect 0:T20']);
+    expect(t.state().visitKey).toBe(key);
+  });
+
+  it('after a short outage an empty takeout seen to start is over if the board no longer shows it, still on if it does', () => {
+    const over = nothingKnownInEmptyTakeout();
+    step(over, takeoutFinished(), 'resync', 1000);
+    expect(over.state().inTakeout).toBe(false);
+    const still = nothingKnownInEmptyTakeout();
+    expect(step(still, takeoutStarted(), 'resync', 1000)).toEqual([]);
+    expect(still.state().inTakeout).toBe(true);
+  });
+
+  it('the last visit reappearing is adopted whatever the outage', () => {
+    for (const away of [10, 60_000]) {
+      const t = online();
+      step(t, takeoutStarted(A, B));
+      step(t, takeoutFinished());
+      expect(step(t, throwing(A, B, C), 'resync', away)).toEqual(['anomaly', 'detect 2:T5 recovered']);
+    }
   });
 });
 

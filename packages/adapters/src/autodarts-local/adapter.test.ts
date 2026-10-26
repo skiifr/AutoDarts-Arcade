@@ -18,7 +18,7 @@ describe('autodarts-local adapter: a normal visit', () => {
     const rig = await onlineRig();
     expect(states(rig)).toEqual(['connecting', 'resyncing', 'online']);
     expect(rig.adapter.version).toBe('2.0.2');
-    expect(rig.transport.requests.map((r) => `${r.kind} ${r.path}`)).toEqual(['GET /api/version', 'WS /api/events?type=state', 'GET /api/state']);
+    expect(rig.transport.requests.map((r) => `${r.kind} ${r.path}`)).toEqual(['GET /api/version', 'WS /api/events', 'GET /api/state']);
 
     for (const s of ['T20', 'M12', 'BULL']) {
       rig.board.throwDart({ segment: s });
@@ -36,9 +36,21 @@ describe('autodarts-local adapter: a normal visit', () => {
     expect(afterVersion.every((f) => f.source.upstreamVersion === '2.0.2' && f.source.adapterVersion === 'autodarts-local@0.1.0')).toBe(true);
   });
 
-  it('opens the bare events path for boards older than 2.x', async () => {
-    const rig = await onlineRig({ board: { version: '1.0.7' } });
+  it.each(['1.0.7', '2.0.2', '2.1.0-beta.5', 'garbage'])('opens the bare events path for version %s', async (version) => {
+    const rig = await onlineRig({ board: { version, noiseFrames: true } });
     expect(rig.transport.requests.find((r) => r.kind === 'WS')?.path).toBe('/api/events');
+    // Frames of other types share the socket and are filtered out.
+    rig.board.throwDart({ segment: 'S7' });
+    rig.board.startTakeout();
+    rig.board.finishTakeout();
+    await rig.sched.advance(50);
+    expect(rig.transport.deliveredFrames.some((f) => f.startsWith('{"type":"motion_state"'))).toBe(true);
+    expect(brief(rig.facts).filter((f) => !f.startsWith('anomaly version'))).toEqual(['detect 0:S7', 'takeout-start', 'takeout-end']);
+  });
+
+  it('opens /api/events?type=state only when asked to', async () => {
+    const rig = await onlineRig({ stateOnlySocket: true });
+    expect(rig.transport.requests.find((r) => r.kind === 'WS')?.path).toBe('/api/events?type=state');
   });
 
   it('confirms a withdrawal with a poll before retracting the dart', async () => {
@@ -51,6 +63,55 @@ describe('autodarts-local adapter: a normal visit', () => {
     await rig.sched.advance(50);
     expect(rig.transport.httpRequestsSince(0).length).toBe(before + 1);
     expect(brief(rig.facts)).toEqual(['detect 0:S1', 'detect 1:S7', 'withdraw']);
+  });
+
+  it('a manual reset: VisitReset first, then a DartWithdrawn for each of the visit’s darts', async () => {
+    const rig = await onlineRig();
+    rig.board.throwDart({ segment: 'S5' });
+    rig.board.throwDart({ segment: 'T20' });
+    await rig.sched.advance(50);
+    rig.board.manualReset();
+    await rig.sched.advance(50);
+    expect(brief(rig.facts)).toEqual(['detect 0:S5', 'detect 1:T20', 'reset', 'withdraw', 'withdraw']);
+    const [reset] = ofType(rig.facts, 'VisitReset');
+    const darts = ofType(rig.facts, 'DartDetected');
+    expect(reset?.payload.visitKey).toBe(darts[0]?.payload.visitKey);
+    expect(ofType(rig.facts, 'DartWithdrawn').map((f) => f.payload.throwId)).toEqual(darts.map((f) => f.payload.throwId));
+  });
+
+  it('gives every fact of one resync, from resyncing to online, one correlationId', async () => {
+    const rig = await onlineRig();
+    rig.board.throwDart({ segment: 'S5' });
+    await rig.sched.advance(50);
+    rig.transport.setReachable(false);
+    await rig.sched.advance(6000);
+    rig.board.throwDart({ segment: 'T20' });
+    rig.transport.inject('{"type":"state","data":{"throws":"many"}}'); // nobody listening: dropped
+    rig.transport.setReachable(true);
+    await rig.sched.advance(2000);
+    const lastState = (state: string): number =>
+      rig.facts.reduce((at, f, i) => (f.type === 'SourceConnectionChanged' && f.payload.state === state ? i : at), -1);
+    const from = lastState('resyncing');
+    const to = lastState('online');
+    const resync = rig.facts.slice(from, to + 1);
+    expect(resync.map((f) => f.type)).toEqual(['SourceConnectionChanged', 'DartDetected', 'SourceConnectionChanged']);
+    expect(ofType(resync, 'DartDetected')[0]?.payload.recovered).toBe(true);
+    const ids = new Set(resync.map((f) => f.correlationId));
+    expect(ids.size).toBe(1);
+    expect([...ids][0]).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    // Facts outside a resync are not grouped.
+    expect(rig.facts.slice(0, from).filter((f) => f.type === 'DartDetected').every((f) => f.correlationId === undefined)).toBe(true);
+    // The first connection's resync is grouped too.
+    const first = rig.facts.slice(0, rig.facts.findIndex((f) => f.type === 'SourceConnectionChanged' && f.payload.state === 'online') + 1);
+    expect(first.map((f) => (f.type === 'SourceConnectionChanged' ? f.payload.state : f.type))).toEqual([
+      'connecting',
+      'resyncing',
+      'BoardStatusChanged',
+      'online',
+    ]);
+    expect(first[0]?.correlationId).toBeUndefined();
+    expect(first[1]?.correlationId).toBeDefined();
+    expect(new Set(first.slice(1).map((f) => f.correlationId)).size).toBe(1);
   });
 
   it('reports a re-read dart as DartUpdated', async () => {
@@ -127,7 +188,8 @@ describe('connection lifecycle (§6.4)', () => {
     rig.board.throwDart({ segment: 'T19' });
     rig.adapter.resync();
     await rig.sched.advance(100);
-    expect(brief(rig.facts)).toEqual(['takeout-end inferred', 'detect 0:T19 recovered']);
+    // 100 ms is too short for a whole visit to come and go: the dart continues the visit.
+    expect(brief(rig.facts)).toEqual(['detect 0:T19 recovered']);
   });
 
   it('stop() closes the socket and goes quiet', async () => {
@@ -205,6 +267,7 @@ describe('frame and payload limits', () => {
     const anomaly = ofType(rig.facts, 'SourceAnomaly').find((a) => a.correlationId !== undefined);
     const [dart] = ofType(rig.facts, 'DartDetected');
     expect(dart?.payload.segment.label).toBe('MISS');
+    expect(dart?.payload.pendingReview).toBe(true);
     expect(anomaly?.payload.note).toMatch(/pending review/);
     expect(anomaly?.correlationId).toBeDefined();
     expect(dart?.correlationId).toBe(anomaly?.correlationId);

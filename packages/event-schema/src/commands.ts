@@ -32,6 +32,11 @@ export const StartSession = defineCommand(
     turnOrder: z.array(PlayerIdSchema).optional(),
     /** The W2 house-rule toggles. The host falls back to its configured defaults when absent. */
     houseRules: HouseRulesSchema.optional(),
+    /**
+     * The game's random stream (`SessionStarted.rngSeed`), for demo mode, fixtures and the
+     * headless runner. The host mints a fresh one when absent.
+     */
+    rngSeed: z.string().min(1).optional(),
   }),
 );
 export const CorrectDart = defineCommand('CorrectDart', z.object({ throwId: ThrowIdSchema, segment: SegmentSchema }));

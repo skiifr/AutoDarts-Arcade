@@ -59,7 +59,10 @@ export class Board {
   }
 
   /** A dart; `throwId` lets a test reuse the same id in two scripted worlds. */
-  dart(segment: Segment, opts: { recovered?: boolean; throwId?: string } = {}): BoardFactDraft & { throwId: string } {
+  dart(
+    segment: Segment,
+    opts: { recovered?: boolean; throwId?: string; pendingReview?: boolean } = {},
+  ): BoardFactDraft & { throwId: string } {
     const throwId = opts.throwId ?? this.ids();
     const f = this.fact('DartDetected', {
       throwId,
@@ -67,12 +70,13 @@ export class Board {
       visitKey: this.visitKey,
       indexInVisit: Math.min(this.index++, 2),
       ...(opts.recovered ? { recovered: true as const } : {}),
+      ...(opts.pendingReview ? { pendingReview: true as const } : {}),
     });
     return Object.assign(f, { throwId });
   }
 
-  update(throwId: string, previous: Segment, segment: Segment): BoardFactDraft {
-    return this.fact('DartUpdated', { throwId, previous, segment });
+  update(throwId: string, previous: Segment, segment: Segment, opts: { pendingReview?: boolean } = {}): BoardFactDraft {
+    return this.fact('DartUpdated', { throwId, previous, segment, ...(opts.pendingReview ? { pendingReview: true as const } : {}) });
   }
 
   withdraw(throwId: string): BoardFactDraft {
@@ -130,8 +134,14 @@ export class Commands {
     } as ArcadeCommand;
   }
 
-  start(gameId: string, players: PlayerRef[], options: Record<string, unknown> = {}, houseRules?: HouseRules) {
-    return this.make('StartSession', { gameId, options, players, ...(houseRules ? { houseRules } : {}) });
+  start(gameId: string, players: PlayerRef[], options: Record<string, unknown> = {}, houseRules?: HouseRules, rngSeed?: string) {
+    return this.make('StartSession', {
+      gameId,
+      options,
+      players,
+      ...(houseRules ? { houseRules } : {}),
+      ...(rngSeed !== undefined ? { rngSeed } : {}),
+    });
   }
   correct(throwId: string, segment: Segment) {
     return this.make('CorrectDart', { throwId, segment });

@@ -30,3 +30,35 @@ export function isoFromEpochMs(ms: number): string {
 
 /** 2026-11-02T20:00:00.000Z, the default start of simulated time. */
 export const SIM_EPOCH_MS = 1_793_649_600_000;
+
+const ISO_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * ISO-8601 (`2026-11-02T20:14:03.120Z`, or with a `±hh:mm` offset) → epoch milliseconds,
+ * without `Date`, so pure code can measure durations on an injected wall clock. Returns
+ * undefined for anything else. Inverse of `isoFromEpochMs` (Hinnant's days-from-civil).
+ */
+export function epochMsFromIso(iso: string): number | undefined {
+  const m = ISO_PATTERN.exec(iso);
+  if (!m) return undefined;
+  const [, ys, mos, ds, hs, mis, ss, frac, zone] = m as unknown as [string, string, string, string, string, string, string, string | undefined, string];
+  const mo = Number(mos);
+  const d = Number(ds);
+  const h = Number(hs);
+  const mi = Number(mis);
+  const s = Number(ss);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 60) return undefined;
+  const y = Number(ys) - (mo <= 2 ? 1 : 0);
+  const era = Math.floor(y / 400);
+  const yoe = y - era * 400;
+  const doy = Math.floor((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5) + d - 1;
+  const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+  const days = era * 146_097 + doe - 719_468;
+  const ms = frac === undefined ? 0 : Math.floor(Number(`0.${frac}`) * 1000 + 1e-6);
+  let offsetMin = 0;
+  if (zone !== 'Z') {
+    const sign = zone.startsWith('-') ? -1 : 1;
+    offsetMin = sign * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4, 6)));
+  }
+  return days * 86_400_000 + h * 3_600_000 + mi * 60_000 + s * 1000 + ms - offsetMin * 60_000;
+}

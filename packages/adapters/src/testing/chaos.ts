@@ -1,8 +1,17 @@
+import { MIN_UNSEEN_VISIT_MS } from '../autodarts-local/visit-tracker';
 import { seededRandom } from '../random';
 import type { TimerHandle } from '../ports';
 import type { FaultPlan } from '../simulator/fake-transport';
 import { ChaosRecorder, type ChaosStats } from './oracle';
 import { makeRig, type Rig } from './rig';
+
+/**
+ * The shortest visit the simulation plays, from its first throw to its takeout finishing. A
+ * real visit cannot be shorter than MIN_UNSEEN_VISIT_MS (throw, detect, pull the darts out);
+ * the extra second covers the simulated network's frame delays (up to ~0.65 s with delay and
+ * reorder faults), which the adapter cannot see. Real LAN latency is milliseconds.
+ */
+export const SIM_MIN_VISIT_MS = MIN_UNSEEN_VISIT_MS + 1000;
 
 /** One chaos run (see chaos.test.ts). Test support only. */
 export function faultPlan(r: () => number): FaultPlan {
@@ -10,6 +19,8 @@ export function faultPlan(r: () => number): FaultPlan {
   const plan: FaultPlan = {};
   if (u < 0.15) return plan; // clean network, outages only
   plan.drop = [0, 0.02, 0.05, 0.1][Math.floor(r() * 4)];
+  // A lost frame comes with a broken connection, as on a real (TCP) network; see FaultPlan.
+  plan.dropBreaksSocket = true;
   plan.duplicate = [0, 0.05, 0.15][Math.floor(r() * 3)];
   plan.delayMs = r() < 0.5 ? [0, 0] : [0, 40 + r() * 160];
   if (r() < 0.3) plan.reorder = 0.03;
@@ -60,8 +71,10 @@ export async function chaosRun(
     }
 
     const darts = r() < 0.15 ? 1 + Math.floor(r() * 2) : 3;
+    let firstThrowAt = -1;
     for (let d = 0; d < darts; d++) {
       await sched.advance(between(250, 2500));
+      if (firstThrowAt < 0) firstThrowAt = sched.now();
       const u = r();
       if (u < 0.05) board.bounceOut();
       else if (u < 0.09) board.phantom();
@@ -80,12 +93,15 @@ export async function chaosRun(
     if (end < 0.05) {
       board.manualReset();
     } else if (end < 0.08) {
+      // stickTakeout takes the darts out at once.
+      await sched.advance(Math.max(0, firstThrowAt + SIM_MIN_VISIT_MS - sched.now()));
       board.stickTakeout();
       await sched.advance(between(8500, 12000));
       board.manualReset();
     } else {
       board.startTakeout();
-      await sched.advance(between(300, 2500));
+      const pulling = between(300, 2500);
+      await sched.advance(Math.max(pulling, firstThrowAt + SIM_MIN_VISIT_MS - sched.now()));
       board.finishTakeout();
     }
     if (r() < 0.05) {

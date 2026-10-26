@@ -86,7 +86,21 @@ describe('rebuildVisitState', () => {
   it('starts a fresh visit after a takeout or reset', () => {
     const facts = scriptToFacts([{ dart: 'T20' }, { reset: true }], { ids, clock: () => 't' });
     const state = rebuildVisitState(facts, () => '01JBX00000000000000000000V');
-    expect(state).toEqual({ visitKey: '01JBX00000000000000000000V', known: [], inTakeout: false, recentVisits: [] });
+    expect(state).toEqual({ visitKey: '01JBX00000000000000000000V', known: [], inTakeout: false, recentVisits: [], observedAt: 't' });
+  });
+
+  it('remembers when the board was last read, ignoring facts that do not come from a reading', () => {
+    let n = 0;
+    const clock = () => `2026-11-02T20:00:0${n++}.000Z`;
+    const facts = scriptToFacts(
+      [{ dart: 'T20' }, { status: 'stuck-takeout' }, { connection: 'offline' }, { connection: 'connecting' }],
+      { ids, clock },
+    );
+    expect(facts.map((f) => f.type)).toEqual(['DartDetected', 'BoardStatusChanged', 'BoardStatusChanged', 'SourceConnectionChanged', 'SourceConnectionChanged']);
+    // The dart (t=0) and the "throwing" status (t=1) were readings; stuck-takeout and the connection changes were not.
+    expect(rebuildVisitState(facts, ids).observedAt).toBe('2026-11-02T20:00:01.000Z');
+    const undated = facts.map((f) => ({ type: f.type, payload: f.payload }));
+    expect(rebuildVisitState(undated, ids).observedAt).toBeUndefined();
   });
 });
 

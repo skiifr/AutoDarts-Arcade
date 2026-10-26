@@ -1,4 +1,5 @@
 import type { BoardFactDraft } from '@arcade/event-schema';
+import type { RestoredVisitState } from './autodarts-local/rebuild';
 import type { BoardGetPath } from './endpoints';
 
 /**
@@ -36,7 +37,7 @@ export interface EventsSocket {
 export interface Transport {
   /** Rejects on network failure or timeout; resolves with any HTTP status. */
   get(path: BoardGetPath, options?: { timeoutMs?: number }): Promise<HttpResponse>;
-  /** Opens `WS /api/events`, with `?type=state` when `stateOnly` is set. */
+  /** Opens `WS /api/events` (bare by default), with `?type=state` only when `stateOnly` is set. */
   openEvents(options: { stateOnly: boolean }, handlers: EventsSocketHandlers): EventsSocket;
 }
 
@@ -68,11 +69,39 @@ export interface BoardSource {
   stop(): void;
   /** Returns an unsubscribe function. */
   subscribe(listener: FactListener): () => void;
+  /** Re-read the board now (the app came back to the foreground). Sources without a board omit it. */
+  resync?(): void;
+  /**
+   * Crash-resume: continue from the visit state rebuilt from the session's log
+   * (`rebuildVisitState`). Called while stopped. Sources without visit state omit it.
+   */
+  restore?(state: RestoredVisitState): void;
 }
 
-/** Small listener set shared by the sources. */
+/** Reports an error outside the current call stack (as an uncaught error), without unwinding it. */
+export function reportLater(err: unknown): void {
+  const queue = (globalThis as { queueMicrotask?: (task: () => void) => void }).queueMicrotask;
+  if (queue) {
+    queue(() => {
+      throw err;
+    });
+  } else {
+    void Promise.reject(err);
+  }
+}
+
+/**
+ * Small listener set shared by the sources. A listener that throws never reaches the emitter:
+ * the source's own state machine (timers, retries) must not unwind half-way because a
+ * subscriber failed. The error goes to `onError` (default: reported as uncaught, later).
+ */
 export class Listeners<T> {
   private readonly set = new Set<(value: T) => void>();
+  private readonly onError: (err: unknown) => void;
+
+  constructor(onError: (err: unknown) => void = reportLater) {
+    this.onError = onError;
+  }
 
   add(listener: (value: T) => void): () => void {
     this.set.add(listener);
@@ -82,7 +111,13 @@ export class Listeners<T> {
   }
 
   emit(value: T): void {
-    for (const listener of [...this.set]) listener(value);
+    for (const listener of [...this.set]) {
+      try {
+        listener(value);
+      } catch (err) {
+        this.onError(err);
+      }
+    }
   }
 
   get size(): number {

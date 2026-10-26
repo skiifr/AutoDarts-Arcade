@@ -14,12 +14,18 @@ import { isLifecycle, relate, takeoutBegins, type Snapshot } from './snapshot';
  * - `live` snapshots (frames and polls while online) follow §6.2.
  * - `resync` snapshots (the first observation after a (re)connect) follow §6.4 and
  *   decision R: darts first seen there are `recovered`, and whenever a takeout may have
- *   happened offline (empty snapshot, or a first dart that is not a known one) the
- *   tracker emits `TakeoutFinished{inferred:true}`. It never invents misses.
+ *   happened offline the tracker emits `TakeoutFinished{inferred:true}`. It never invents
+ *   misses. A takeout may have happened when known darts are missing from the snapshot
+ *   (always), or, with no darts known, when the board was out of sight long enough for a
+ *   whole visit to come and go (`MIN_UNSEEN_VISIT_MS`): a short Wi-Fi blip on an empty
+ *   visit infers nothing, and darts thrown during it continue the visit.
  * - `classifyFrame` tells the adapter which WebSocket frames are plain progress and
  *   which would retract, change or replace known darts; those are confirmed with a
  *   `GET /api/state` first, so a late or duplicated frame can never withdraw or
  *   re-add a dart.
+ * - A dart whose segment cannot be read is reported as a miss with `pendingReview: true`
+ *   (§7.3), and the fact carries the anomaly so the adapter can log a correlated
+ *   `SourceAnomaly` for diagnostics.
  */
 
 export interface KnownDart {
@@ -47,6 +53,14 @@ export type TrackerFact =
   | { type: 'SourceAnomaly'; payload: EventOf<'SourceAnomaly'>['payload'] };
 
 export type ApplyMode = 'live' | 'resync';
+
+/**
+ * The shortest time in which a whole visit can come and go unseen: someone throws, the board
+ * detects the dart, and the darts are pulled out (owner decision, Phase 2/3 integration). A
+ * resync with no known darts infers a takeout only if the board was out of sight at least
+ * this long; shorter outages cannot hide one.
+ */
+export const MIN_UNSEEN_VISIT_MS = 5000;
 
 const RECENT_VISITS = 2;
 
@@ -114,9 +128,13 @@ export class VisitTracker {
     return extendsKnown ? 'apply' : 'confirm';
   }
 
-  apply(snap: Snapshot, mode: ApplyMode): TrackerFact[] {
+  /**
+   * `awayMs` (resync only): how long the board was out of sight before this snapshot, from the
+   * last good contact. Unknown (undefined) counts as long enough to hide a whole visit.
+   */
+  apply(snap: Snapshot, mode: ApplyMode, awayMs?: number): TrackerFact[] {
     const out: TrackerFact[] = [];
-    if (mode === 'resync' || !this.observed) this.applyResync(snap, out);
+    if (mode === 'resync' || !this.observed) this.applyResync(snap, out, awayMs);
     else this.applyLive(snap, out);
     this.observed = true;
     this.lastEvent = snap.event;
@@ -208,20 +226,30 @@ export class VisitTracker {
 
   // ── resync (§6.4, decision R) ─────────────────────────────────────────────
 
-  private applyResync(snap: Snapshot, out: TrackerFact[]): void {
+  private applyResync(snap: Snapshot, out: TrackerFact[], awayMs: number | undefined): void {
     const T = snap.throws;
     const K = this.s.known;
+    const wholeVisitFits = awayMs === undefined || awayMs >= MIN_UNSEEN_VISIT_MS;
     if (!this.observed) {
       // First contact with no history: whatever is on the board is a baseline.
       this.detectFrom(out, T, 0, true);
-    } else if (T.length === 0) {
-      // A takeout may have happened while we were away.
+    } else if (T.length === 0 && K.length > 0) {
+      // Known darts are gone: a takeout may have happened while we were away.
       this.finishTakeout(out, true);
+    } else if (T.length === 0) {
+      // Nothing was on the board and nothing is: a whole visit may have come and gone, but
+      // only if we were away long enough for one.
+      if (wholeVisitFits) this.finishTakeout(out, true);
+      else this.endEmptyTakeout(snap);
     } else if (K.length === 0) {
-      // Nothing known proves the visit went on: a whole visit may have come and gone,
-      // unless these are exactly the last visit's darts (its takeout was called off).
+      // Nothing known proves the visit went on: a whole visit may have come and gone, unless
+      // these are exactly the last visit's darts (its takeout was called off), or we were not
+      // away long enough for a visit before these darts.
       const ghosts = this.s.inTakeout ? 0 : this.adoptGhosts(out, T);
-      if (ghosts === 0) this.finishTakeout(out, true);
+      if (ghosts === 0) {
+        if (wholeVisitFits) this.finishTakeout(out, true);
+        else this.endEmptyTakeout(snap);
+      }
       this.detectFrom(out, T, ghosts, true);
     } else if (!this.anchoredResync(T)) {
       this.finishTakeout(out, true);
@@ -277,6 +305,18 @@ export class VisitTracker {
     }
     this.finishTakeout(out, true);
     this.detectFrom(out, T, 0, true);
+  }
+
+  /**
+   * After a short outage on an empty visit: a takeout of the empty board we saw start (a hand
+   * in front of the cameras, a stuck takeout) is over if the board no longer shows one. It
+   * removed no darts, so it ends nothing.
+   */
+  private endEmptyTakeout(snap: Snapshot): void {
+    if (this.s.inTakeout && !takeoutBegins(snap)) {
+      this.s.inTakeout = false;
+      this.blindTakeout = false;
+    }
   }
 
   private beginTakeoutIfNeeded(snap: Snapshot, out: TrackerFact[]): void {
@@ -356,6 +396,7 @@ export class VisitTracker {
     };
     if (t.coords) payload.coords = t.coords;
     if (recovered) payload.recovered = true;
+    if (t.fatal) payload.pendingReview = true;
     out.push(t.fatal ? { type: 'DartDetected', payload, anomaly: t.fatal } : { type: 'DartDetected', payload });
     const known: KnownDart = { throwId, segment: t.segment, indexInVisit: index };
     if (t.coords) known.coords = t.coords;
@@ -369,6 +410,7 @@ export class VisitTracker {
     if (!sameSegment(k.segment, t.segment) || relate(k, t) === 'other') {
       const payload: EventOf<'DartUpdated'>['payload'] = { throwId: k.throwId, previous: k.segment, segment: t.segment };
       if (t.coords) payload.coords = t.coords;
+      if (t.fatal) payload.pendingReview = true;
       out.push(t.fatal ? { type: 'DartUpdated', payload, anomaly: t.fatal } : { type: 'DartUpdated', payload });
     }
     const next: KnownDart = { throwId: k.throwId, segment: t.segment, indexInVisit: k.indexInVisit };

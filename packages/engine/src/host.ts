@@ -57,6 +57,8 @@ interface SessionParams {
   players: readonly PlayerRef[];
   turnOrder?: readonly string[];
   houseRules?: HouseRules;
+  /** Absent: the host mints one, so every new session (also a rematch) gets a fresh stream. */
+  rngSeed?: string;
 }
 
 function rejected(e: Rejection): HostResult {
@@ -202,22 +204,18 @@ export class SessionHost {
 
   private async processFact(fact: BoardFactDraft): Promise<HostResult> {
     const folder = this.openFolder();
-    if (!folder) {
-      this.tracker.observe(fact);
-      return { status: 'not-recorded' };
-    }
     const check = ArcadeEventSchema.safeParse({
       ...fact,
       schema: EVENT_SCHEMA_VERSION,
       eventId: '00000000000000000000000000',
-      sessionId: folder.sessionId,
+      sessionId: folder?.sessionId ?? '00000000000000000000000000',
       seq: 1,
       receivedAt: fact.occurredAt,
     });
     if (!check.success || !isBoardFact(check.data)) {
       return { status: 'rejected', reason: 'invalid', message: check.error?.message ?? 'not a board fact' };
     }
-    // Log the validated copy: zod has dropped anything the schema does not know.
+    // Keep and log the validated copy: zod has dropped anything the schema does not know.
     const { type, payload, source, occurredAt, causationId, correlationId } = check.data;
     const clean = {
       type,
@@ -227,11 +225,15 @@ export class SessionHost {
       ...(causationId !== undefined ? { causationId } : {}),
       ...(correlationId !== undefined ? { correlationId } : {}),
     } as BoardFactDraft;
+    if (!folder) {
+      this.tracker.observe(clean);
+      return { status: 'not-recorded' };
+    }
     const result = await this.commit(folder, (batch, decider) => {
       const appended = batch.emit(clean);
       decider.deriveFromFact(appended);
     });
-    if (result.status === 'applied') this.tracker.observe(fact);
+    if (result.status === 'applied') this.tracker.observe(clean);
     return result;
   }
 
@@ -357,15 +359,18 @@ export class SessionHost {
         options: isPlainRecord(options.data) ? options.data : params.options,
         players: [...params.players],
         turnOrder,
-        rngSeed: ids(),
+        rngSeed: params.rngSeed ?? ids(),
         houseRules: params.houseRules ?? this.deps.defaultHouseRules ?? DEFAULT_HOUSE_RULES,
       },
       source: decider.manual(cmd.actor),
       occurredAt: cmd.issuedAt,
       causationId: cmd.commandId,
     });
-    // Darts already in the board are recorded as baseline: never scored, and the first turn
-    // waits until the board is clear (ARCHITECTURE §6.3).
+    // The board as it is: its connection and status, and the darts already in it, recorded as
+    // baseline: never scored, and the first turn waits until the board is clear (§6.3).
+    for (const f of this.tracker.boardState()) {
+      batch.emit({ ...f, causationId: cmd.commandId } as BoardFactDraft);
+    }
     for (const d of this.tracker.onBoard()) {
       batch.emit({
         type: 'DartDetected',
@@ -376,6 +381,7 @@ export class SessionHost {
           visitKey: d.visitKey,
           indexInVisit: d.indexInVisit,
           ...(d.recovered ? { recovered: true as const } : {}),
+          ...(d.pendingReview ? { pendingReview: true as const } : {}),
         },
         source: d.source,
         occurredAt: d.occurredAt,

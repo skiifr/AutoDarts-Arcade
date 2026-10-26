@@ -34,6 +34,8 @@ export interface HealthMetrics {
 }
 
 interface DartFacts {
+  /** `sessionId:turnIndex`. */
+  turn: string;
   detected: boolean;
   reason: 'undetected' | 'bounce-out' | 'manual-mode' | null;
   byHand: boolean;
@@ -49,6 +51,8 @@ export function healthMetrics(events: readonly ArcadeEvent[]): HealthMetrics {
   const sessions = new Set<string>();
   const offline = new Map<string, boolean>();
   const stuck = new Map<string, boolean>();
+  /** Turns ended by "Next player": any automatic misses in them padded a visit typed in by hand. */
+  const skippedTurns = new Set<string>();
   let needsReviewTurns = 0;
   let reconnects = 0;
   let disconnects = 0;
@@ -59,6 +63,7 @@ export function healthMetrics(events: readonly ArcadeEvent[]): HealthMetrics {
     switch (e.type) {
       case 'DartThrown':
         darts.set(`${e.sessionId}:${e.payload.throwId}`, {
+          turn: `${e.sessionId}:${e.payload.turnIndex}`,
           detected: true,
           reason: null,
           byHand: false,
@@ -70,6 +75,7 @@ export function healthMetrics(events: readonly ArcadeEvent[]): HealthMetrics {
         break;
       case 'DartAdded':
         darts.set(`${e.sessionId}:${e.payload.throwId}`, {
+          turn: `${e.sessionId}:${e.payload.turnIndex}`,
           detected: false,
           reason: e.payload.reason,
           byHand: e.source.kind === 'manual',
@@ -93,6 +99,7 @@ export function healthMetrics(events: readonly ArcadeEvent[]): HealthMetrics {
       }
       case 'TurnEnded':
         if (e.payload.needsReview) needsReviewTurns++;
+        if (e.payload.reason === 'manual-skip') skippedTurns.add(`${e.sessionId}:${e.payload.turnIndex}`);
         break;
       case 'SourceConnectionChanged':
         if (e.payload.state === 'offline' && !offline.get(e.sessionId)) {
@@ -126,7 +133,7 @@ export function healthMetrics(events: readonly ArcadeEvent[]): HealthMetrics {
       if (d.userCorrected) misread++;
       if (d.voided !== null && d.voided !== 'source-withdrawn') falseDetections++;
     }
-    if (d.voided !== null || d.reason === 'manual-mode') continue;
+    if (d.voided !== null || d.reason === 'manual-mode' || (d.padded && skippedTurns.has(d.turn))) continue;
     inPlay++;
     if (d.reason === 'bounce-out') bounceOuts++;
     else if ((d.padded && d.scoring) || (d.byHand && d.reason === 'undetected')) missed++;

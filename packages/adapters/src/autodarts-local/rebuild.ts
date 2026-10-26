@@ -2,16 +2,47 @@ import type { BoardFact } from '@arcade/event-schema';
 import type { IdSource } from '../ports';
 import type { KnownDart, VisitState } from './visit-tracker';
 
-type FactLike = Pick<BoardFact, 'type' | 'payload'> | { type: string; payload: unknown };
+type FactLike = (Pick<BoardFact, 'type' | 'payload'> | { type: string; payload: unknown }) & { occurredAt?: string };
+
+/** Visit state to resume from, with the last time the board was seen. */
+export interface RestoredVisitState extends VisitState {
+  /**
+   * When the board's state was last known (ISO, the adapter's clock): the latest fact that
+   * came from reading the board. The resumed adapter measures the outage from here; when it
+   * is absent the outage counts as long enough to hide a whole visit.
+   */
+  observedAt?: string;
+}
+
+/** Facts that are only emitted while reading the board's state. */
+function isContact(e: FactLike): boolean {
+  switch (e.type) {
+    case 'DartDetected':
+    case 'DartUpdated':
+    case 'DartWithdrawn':
+    case 'TakeoutStarted':
+    case 'TakeoutFinished':
+    case 'VisitReset':
+      return true;
+    case 'BoardStatusChanged':
+      // stuck-takeout comes from a timer, not from a reading.
+      return (e.payload as { status?: string }).status !== 'stuck-takeout';
+    case 'SourceConnectionChanged':
+      return (e.payload as { state?: string }).state === 'online';
+    default:
+      return false;
+  }
+}
 
 /**
  * Rebuilds the adapter's visit state from persisted layer-1 board facts, in seq order
  * (ARCHITECTURE §6.5: "The adapter's known[] is rebuilt from the last visit's events").
- * Pass the result as `restored` when resuming a session; the first connection then
- * resyncs against it. Facts of other layers are ignored.
+ * Pass the result as `restored` (or to `restore()`) when resuming a session; the first
+ * connection then resyncs against it. Facts of other layers are ignored.
  */
-export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): VisitState {
+export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): RestoredVisitState {
   let visitKey: string | null = null;
+  let observedAt: string | undefined;
   let known: KnownDart[] = [];
   let inTakeout = false;
   const recent: KnownDart[][] = [];
@@ -25,7 +56,8 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): V
     inTakeout = false;
   };
 
-  for (const e of events as readonly BoardFact[]) {
+  for (const e of events as readonly (BoardFact & { occurredAt?: string })[]) {
+    if (e.occurredAt !== undefined && isContact(e)) observedAt = e.occurredAt;
     switch (e.type) {
       case 'DartDetected': {
         const p = e.payload;
@@ -62,5 +94,7 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): V
         break;
     }
   }
-  return { visitKey: visitKey ?? ids(), known: known.filter(Boolean), inTakeout, recentVisits: recent };
+  const state: RestoredVisitState = { visitKey: visitKey ?? ids(), known: known.filter(Boolean), inTakeout, recentVisits: recent };
+  if (observedAt !== undefined) state.observedAt = observedAt;
+  return state;
 }
