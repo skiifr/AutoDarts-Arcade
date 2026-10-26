@@ -20,6 +20,23 @@ export {
   type StepperProps,
 } from './controls';
 export { Dartboard, type BoardSpot, type DartboardMarker, type DartboardProps } from './Dartboard';
+export {
+  BOARD_STATUS_LABELS,
+  EMPTY_TICKER,
+  IDLE_CONNECTION,
+  TICKER_LIMIT,
+  connectionBadge,
+  tickerReduce,
+  tickerTime,
+  trackConnection,
+  type ConnectionView,
+  type LinkStatusLike,
+  type TickerBoardStatus,
+  type TickerDart,
+  type TickerEntry,
+  type TickerState,
+  type TickerTone,
+} from './factTicker';
 export { Focusable, type FocusableProps, type FocusState } from './Focusable';
 export { FocusGuide } from './FocusGuide';
 export { GameTileArt } from './GameTileArt';
