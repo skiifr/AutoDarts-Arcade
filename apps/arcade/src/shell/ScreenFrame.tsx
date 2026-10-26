@@ -1,30 +1,8 @@
-import { AText, Button, StatusPill, palette, space, useLayout } from '@arcade/ui-kit';
+import { AText, Button, StatusPill, arcade, space, useLayout } from '@arcade/ui-kit';
 import type { ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
-
-/** Soft arcade glow behind every screen. */
-function Backdrop() {
-  return (
-    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-      <Svg width="100%" height="100%">
-        <Defs>
-          <RadialGradient id="glow-top" cx="50%" cy="-10%" r="75%">
-            <Stop offset="0" stopColor={palette.rose} stopOpacity={0.16} />
-            <Stop offset="1" stopColor={palette.bg} stopOpacity={0} />
-          </RadialGradient>
-          <RadialGradient id="glow-bottom" cx="85%" cy="115%" r="60%">
-            <Stop offset="0" stopColor={palette.cyan} stopOpacity={0.1} />
-            <Stop offset="1" stopColor={palette.bg} stopOpacity={0} />
-          </RadialGradient>
-        </Defs>
-        <Rect x="0" y="0" width="100%" height="100%" fill="url(#glow-top)" />
-        <Rect x="0" y="0" width="100%" height="100%" fill="url(#glow-bottom)" />
-      </Svg>
-    </View>
-  );
-}
+import { ArcadeBackdrop } from './ArcadeScreen';
 
 export interface ScreenFrameProps {
   title: string;
@@ -40,8 +18,8 @@ export function ScreenFrame({ title, subtitle, onBack, right, boardStatus = { to
   const { s, gutterX, gutterY, input, mode } = useLayout();
   const insets = useSafeAreaInsets();
   return (
-    <View style={{ flex: 1, backgroundColor: palette.bg }}>
-      <Backdrop />
+    <View style={{ flex: 1, backgroundColor: arcade.bg }}>
+      <ArcadeBackdrop />
       <View
         style={{
           flex: 1,
@@ -55,7 +33,7 @@ export function ScreenFrame({ title, subtitle, onBack, right, boardStatus = { to
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: s(space.md), flexWrap: mode === 'narrow' ? 'wrap' : 'nowrap' }}>
           {onBack && input === 'touch' ? <Button label="Back" icon="◀" variant="ghost" size="sm" onPress={onBack} /> : null}
           <View style={{ flex: 1, minWidth: s(160) }}>
-            <AText variant={mode === 'wide' ? 'h2' : 'h3'} upper numberOfLines={1}>
+            <AText variant="headline" upper numberOfLines={1} style={mode === 'wide' ? undefined : { fontSize: s(22), lineHeight: s(25) }}>
               {title}
             </AText>
             {subtitle ? (
