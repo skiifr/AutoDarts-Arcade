@@ -262,6 +262,103 @@ describe('turn policy (ARCHITECTURE §8.3, §6.3)', () => {
   });
 });
 
+/**
+ * A visit whose darts were all voided still ended at its takeout or reset: only a visit that
+ * never had a dart is an empty takeout (a hand in front of the cameras). Treating "every dart
+ * voided" as empty kept the turn open, so the next player's visit was scored to this player
+ * (11 of the 1,000 e2e chaos seeds, e.g. 162).
+ */
+describe('a visit whose darts were all voided', () => {
+  const players = (rig: ReturnType<typeof makeRig>) =>
+    rig.host.getSnapshot()!.turns.filter((t) => t.ended).map((t) => [t.playerId, t.darts.map((d) => d.segment.label), t.needsReview]);
+
+  it('the board withdrew its only dart: the takeout ends the turn, padded and flagged, and the next visit is the next player’s', async () => {
+    const rig = await started('test-sum');
+    const { board } = rig;
+    const d = board.dart(S5);
+    const [, , end] = await rig.run(d, board.withdraw(d.throwId), board.takeout());
+    expect(types(end)).toEqual(['TakeoutFinished', 'DartAdded', 'DartAdded', 'DartAdded', 'TurnEnded', 'TurnStarted']);
+    expect(find(end, 'TurnEnded')[0]!.payload).toEqual({ playerId: A.playerId, turnIndex: 0, reason: 'takeout', needsReview: true });
+    await rig.run(board.dart(T20), board.dart(T20), board.dart(T20), board.takeout());
+    expect(players(rig)).toEqual([
+      [A.playerId, ['MISS', 'MISS', 'MISS'], true],
+      [B.playerId, ['T20', 'T20', 'T20'], false],
+    ]);
+    expect(rig.host.getSnapshot()!.turns[0]!.voidedDarts.map((v) => [v.segment.label, v.reason])).toEqual([['S5', 'source-withdrawn']]);
+  });
+
+  it('the player voided every dart: the takeout ends the turn, padded, not flagged (a person did it)', async () => {
+    const rig = await started('test-sum');
+    const { board, cmd } = rig;
+    const a = board.dart(S5);
+    const b = board.dart(S1);
+    const [, , , , end] = await rig.run(a, b, cmd.void(a.throwId, 'false-detection'), cmd.void(b.throwId, 'false-detection'), board.takeout());
+    expect(find(end, 'TurnEnded')[0]!.payload).toEqual({ playerId: A.playerId, turnIndex: 0, reason: 'takeout' });
+    await rig.run(board.dart(S20), board.takeout());
+    expect(players(rig)).toEqual([
+      [A.playerId, ['MISS', 'MISS', 'MISS'], false],
+      [B.playerId, ['S20', 'MISS', 'MISS'], false],
+    ]);
+  });
+
+  it('a person voided one dart and the board withdrew the other: flagged', async () => {
+    const rig = await started('test-sum');
+    const { board, cmd } = rig;
+    const a = board.dart(S5);
+    const b = board.dart(S1);
+    const [, , , , end] = await rig.run(a, b, cmd.void(a.throwId), board.withdraw(b.throwId), board.takeout());
+    expect(find(end, 'TurnEnded')[0]!.payload.needsReview).toBe(true);
+    expect(rig.host.getSnapshot()!.currentPlayerId).toBe(B.playerId);
+  });
+
+  it('a board reset of a visit whose darts were all withdrawn ends the turn, flagged, not padded', async () => {
+    const rig = await started('test-sum');
+    const { board } = rig;
+    const d = board.dart(S5);
+    const [, , reset] = await rig.run(d, board.withdraw(d.throwId), board.reset());
+    expect(types(reset)).toEqual(['VisitReset', 'TurnEnded', 'TurnStarted']);
+    expect(find(reset, 'TurnEnded')[0]!.payload).toMatchObject({ playerId: A.playerId, needsReview: true });
+    expect(rig.host.getSnapshot()!.currentPlayerId).toBe(B.playerId);
+  });
+
+  it('a visit that never had a dart is still an empty takeout, also after an earlier visit of the turn was voided away', async () => {
+    const rig = await started('test-sum');
+    const { board, cmd } = rig;
+    const [hand] = await rig.run(board.takeout(), board.reset());
+    expect(types(hand)).toEqual(['TakeoutFinished']);
+    expect(rig.host.getSnapshot()!.currentPlayerId).toBe(A.playerId);
+    // A dart typed in by hand on a visit the board saw nothing of: the takeout still ends the turn.
+    const [, end] = await rig.run(cmd.add(A.playerId, 0, 0, S20, 'bounce-out'), board.takeout());
+    expect(types(end)).toEqual(['TakeoutFinished', 'DartAdded', 'DartAdded', 'TurnEnded', 'TurnStarted']);
+  });
+
+  it('a visit held during a review pause whose darts the board all withdrew ends its turn on release, flagged', async () => {
+    const rig = await started('test-sum', [A, B, makePlayers(3)[2]!]);
+    const { board, cmd } = rig;
+    await rig.run(board.dart(S20), board.takeout({ inferred: true }));
+    const held = board.dart(S5);
+    await rig.run(held, board.withdraw(held.throwId), board.takeout(), board.dart(S1));
+    const [confirm] = await rig.run(cmd.confirm(0));
+    expect(types(confirm)).toEqual([
+      'TurnReviewed',
+      'GameResumed',
+      'TurnStarted',
+      'DartAdded',
+      'DartAdded',
+      'DartAdded',
+      'TurnEnded',
+      'TurnStarted',
+      'DartThrown',
+    ]);
+    const s = rig.host.getSnapshot()!;
+    expect(s.turns.map((t) => [t.darts.map((d) => d.segment.label), t.needsReview])).toEqual([
+      [['S20'], true],
+      [['MISS', 'MISS', 'MISS'], true],
+      [['S1'], false],
+    ]);
+  });
+});
+
 describe('baseline darts (§6.3: already on the board when the game starts)', () => {
   it('records them as baseline, never scores them, and starts the first turn once the board is clear', async () => {
     const rig = makeRig();

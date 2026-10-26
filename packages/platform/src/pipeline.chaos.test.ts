@@ -31,6 +31,7 @@ const zero = (): E2EStats => ({
   reviewPauses: 0,
   recoveredDarts: 0,
   coveredLostVisits: 0,
+  withdrawnVisits: 0,
   finished: 0,
 });
 
@@ -73,7 +74,8 @@ describe('end-to-end chaos: board → adapter → runtime → host → game', ()
       if (run.violations.length > 0) failures.push(`seed ${10_000 + seed}: ${run.violations.slice(0, 3).join(' | ')}`);
     }
     expect(failures).toEqual([]);
-    expect(total.flaggedTurns + total.reviewPauses + total.inferredTakeouts + total.recoveredDarts).toBe(0);
+    // The only flag a clean network allows: the board withdrew every dart of a visit.
+    expect(total.flaggedTurns - total.withdrawnVisits + total.reviewPauses + total.inferredTakeouts + total.recoveredDarts).toBe(0);
     expect(total.turns).toBeGreaterThan(1500);
   }, 60_000);
 

@@ -272,21 +272,35 @@ export class SessionFolder {
 
   /**
    * What a review pause is holding for the turns after it, in the order it happened: each
-   * visit with held board darts (in board order), and each visit with no darts that the board
+   * visit with held board darts (in board order), each visit with no darts that the board
    * may have ended offline (`TakeoutFinished{inferred}` with nothing held: a whole visit may
-   * have come and gone). Empty while the game is over: there is no next turn to hold for.
+   * have come and gone), and each visit that ended after the board withdrew every dart it
+   * held (`withdrawn`: it still was a visit). `lastSeq`: the latest of those darts, so only a
+   * visit end after it closes the visit. Empty while the game is over: there is no next turn
+   * to hold for.
    */
-  heldVisits(): { visit: VisitRecord; darts: BoardDart[] }[] {
+  heldVisits(): { visit: VisitRecord; darts: BoardDart[]; withdrawn: number; lastSeq: number }[] {
     if (this.heldOrder.length === 0 || this.isFinished()) return [];
-    const out: { visit: VisitRecord; darts: BoardDart[] }[] = [];
+    const out: { visit: VisitRecord; darts: BoardDart[]; withdrawn: number; lastSeq: number }[] = [];
     for (const key of this.heldOrder) {
       const visit = this.visits.get(key)!;
       const darts: BoardDart[] = [];
-      for (const id of visit.throwIds) if (this.held.has(id)) darts.push(this.boardDarts.get(id)!);
+      let withdrawn = 0;
+      let lastSeq = 0;
+      for (const id of visit.throwIds) {
+        const bd = this.boardDarts.get(id)!;
+        if (this.held.has(id)) darts.push(bd);
+        else if (bd.phase === 'review' && bd.withdrawn && bd.attributedTo === null) withdrawn++;
+        else continue;
+        lastSeq = Math.max(lastSeq, bd.seq);
+      }
       const end = visit.ended;
       const pendingEnd =
-        visit.owner === null && end !== null && end.kind === 'takeout' && end.inferred && !this.consumedEnds.has(end.eventId);
-      if (darts.length > 0 || pendingEnd) out.push({ visit, darts });
+        visit.owner === null &&
+        end !== null &&
+        !this.consumedEnds.has(end.eventId) &&
+        ((end.kind === 'takeout' && end.inferred) || (withdrawn > 0 && darts.length === 0));
+      if (darts.length > 0 || pendingEnd) out.push({ visit, darts, withdrawn, lastSeq });
     }
     return out;
   }

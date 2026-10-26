@@ -30,6 +30,8 @@ export interface E2EStats {
   recoveredDarts: number;
   /** Board visits whose darts never reached a turn, each covered by a flagged turn. */
   coveredLostVisits: number;
+  /** Turns flagged because the board withdrew every dart of their visit. */
+  withdrawnVisits: number;
   finished: number;
 }
 
@@ -202,7 +204,7 @@ const sameSeg = (a: Segment, b: Segment): boolean => a.label === b.label && a.be
  * visits): a phantom or a missed bounce-out is a board error only a person can catch, not a
  * pipeline error. A turn is right when its board darts, in order and with their final
  * segments, are exactly the darts the board listed when one visit ended, and it ended with that
- * visit. Every turn must be right or flagged needsReview; every board visit with darts must end
+ * visit; its voided darts are of that visit too. Every turn must be right or flagged needsReview; every board visit with darts must end
  * up in turns or be covered by a flagged turn; nothing invented or counted twice.
  */
 export function judge(
@@ -289,11 +291,14 @@ export function judge(
     }
     const dets = darts.map((d) => detOfThrow.get(d.throwId));
     if (dets.some((d) => d === undefined)) continue; // reported as invented above
-    if (dets.length === 0) {
+    // Voided darts still say which board visit the turn was: a turn whose darts were all
+    // voided must not run on into the next visit.
+    const voided = t.voidedDarts.filter((d) => d.origin === 'detected' || d.origin === 'recovered').map((d) => detOfThrow.get(d.throwId));
+    const visits = new Set([...dets, ...voided].filter((d) => d !== undefined).map((d) => detById.get(d)!.visit));
+    if (visits.size === 0) {
       if (t.ended) v.push(`${label}: ended with no board darts, unflagged`);
       continue;
     }
-    const visits = new Set(dets.map((d) => detById.get(d!)!.visit));
     const describe = () =>
       `scored [${darts.map((d) => d.segment.label).join(' ')}] vs board [${[...visits].map((bv) => finalOf(bv).map((id) => detById.get(id)!.segment.label).join(' ')).join(' | ')}]`;
     if (visits.size !== 1) {
@@ -363,8 +368,12 @@ export function judge(
 
   const reviewPauses = log.filter((e) => e.type === 'GamePaused' && e.payload.reason === 'review').length;
   const flaggedTurns = state.turns.filter((t) => t.needsReview).length;
+  // The board may withdraw every dart of a visit on a clean network too: that turn is flagged.
+  const withdrawnVisits = state.turns.filter(
+    (t) => t.needsReview && t.darts.every((d) => d.padded) && t.voidedDarts.some((d) => d.reason === 'source-withdrawn'),
+  ).length;
   if (options.clean) {
-    if (flaggedTurns > 0) v.push(`clean network: ${flaggedTurns} turn(s) flagged`);
+    if (flaggedTurns > withdrawnVisits) v.push(`clean network: ${flaggedTurns - withdrawnVisits} turn(s) flagged`);
     if (reviewPauses + inferredTakeouts + recoveredDarts > 0) {
       v.push(`clean network: ${reviewPauses} review pause(s), ${inferredTakeouts} inferred takeout(s), ${recoveredDarts} recovered dart(s)`);
     }
@@ -380,6 +389,7 @@ export function judge(
       reviewPauses,
       recoveredDarts,
       coveredLostVisits,
+      withdrawnVisits,
       finished: state.finished ? 1 : 0,
     },
   };
