@@ -57,6 +57,8 @@ interface SessionParams {
   players: readonly PlayerRef[];
   turnOrder?: readonly string[];
   houseRules?: HouseRules;
+  /** Absent: the host mints one, so every new session (also a rematch) gets a fresh stream. */
+  rngSeed?: string;
 }
 
 function rejected(e: Rejection): HostResult {
@@ -357,7 +359,7 @@ export class SessionHost {
         options: isPlainRecord(options.data) ? options.data : params.options,
         players: [...params.players],
         turnOrder,
-        rngSeed: ids(),
+        rngSeed: params.rngSeed ?? ids(),
         houseRules: params.houseRules ?? this.deps.defaultHouseRules ?? DEFAULT_HOUSE_RULES,
       },
       source: decider.manual(cmd.actor),

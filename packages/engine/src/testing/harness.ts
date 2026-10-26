@@ -134,8 +134,14 @@ export class Commands {
     } as ArcadeCommand;
   }
 
-  start(gameId: string, players: PlayerRef[], options: Record<string, unknown> = {}, houseRules?: HouseRules) {
-    return this.make('StartSession', { gameId, options, players, ...(houseRules ? { houseRules } : {}) });
+  start(gameId: string, players: PlayerRef[], options: Record<string, unknown> = {}, houseRules?: HouseRules, rngSeed?: string) {
+    return this.make('StartSession', {
+      gameId,
+      options,
+      players,
+      ...(houseRules ? { houseRules } : {}),
+      ...(rngSeed !== undefined ? { rngSeed } : {}),
+    });
   }
   correct(throwId: string, segment: Segment) {
     return this.make('CorrectDart', { throwId, segment });
