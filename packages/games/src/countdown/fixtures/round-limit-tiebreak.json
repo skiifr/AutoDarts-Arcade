@@ -1,0 +1,26 @@
+{
+  "description": "301 with a 10-round limit: Alex and Jo both end on 121, and Alex's 180 beats Jo's best of 60.",
+  "players": ["Alex", "Jo", "Sam"],
+  "options": { "start": 301, "maxRounds": 10 },
+  "visits": [
+    ["T20", "T20", "T20"], ["T20"], [],
+    [], ["T20"], [],
+    [], ["T20"], [],
+    [], [], [],
+    [], [], [],
+    [], [], [],
+    [], [], [],
+    [], [], [],
+    [], [], [],
+    [], [], []
+  ],
+  "expect": {
+    "finished": true,
+    "turns": 30,
+    "standings": [
+      { "player": "Alex", "rank": 1, "score": 121 },
+      { "player": "Jo", "rank": 2, "score": 121 },
+      { "player": "Sam", "rank": 3, "score": 301 }
+    ]
+  }
+}

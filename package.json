@@ -12,16 +12,18 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "tsc -p packages/event-schema && tsc -p packages/engine && tsc -p packages/games && tsc -p packages/adapters && tsc -p packages/platform && tsc -p packages/ui-kit && tsc -p apps/arcade",
+    "typecheck": "tsc -p packages/event-schema && tsc -p packages/engine && tsc -p packages/games && tsc -p packages/adapters && tsc -p packages/platform && tsc -p packages/ui-kit && tsc -p apps/arcade && tsc -p apps/devtools/headless-runner",
     "test": "vitest run",
     "verify": "yarn lint && yarn typecheck && yarn test",
     "web": "yarn --cwd apps/arcade web",
-    "export:web": "yarn --cwd apps/arcade export:web"
+    "export:web": "yarn --cwd apps/arcade export:web",
+    "play-headless": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON apps/devtools/headless-runner/src/main.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22",
     "@types/ws": "^8.18.2",
+    "@vitest/coverage-v8": "5.0.5",
     "eslint": "^10.13.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "fast-check": "^4.10.2",

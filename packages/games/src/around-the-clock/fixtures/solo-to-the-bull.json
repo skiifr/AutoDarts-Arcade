@@ -1,0 +1,19 @@
+{
+  "description": "Solo practice: a few misses and an out-of-order 8, then the inner bull finishes on dart 24.",
+  "players": ["Alex"],
+  "visits": [
+    ["S1", "S2", "MISS"],
+    ["S3", "S4", "S5"],
+    ["S6", "S8", "S7"],
+    ["S8", "S9", "S10"],
+    ["S11", "S12", "S13"],
+    ["S14", "S15", "S16"],
+    ["S17", "S18", "S19"],
+    ["S20", "MISS", "BULL"]
+  ],
+  "expect": {
+    "finished": true,
+    "turns": 8,
+    "standings": [{ "player": "Alex", "rank": 1, "score": 21 }]
+  }
+}

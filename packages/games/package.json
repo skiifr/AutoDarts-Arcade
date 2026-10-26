@@ -5,6 +5,9 @@
   "description": "Game modules, one folder per game. Pure TypeScript: no React, React Native or platform imports.",
   "main": "src/index.ts",
   "types": "src/index.ts",
+  "scripts": {
+    "coverage": "cd ../.. && vitest run --coverage packages/games"
+  },
   "dependencies": {
     "@arcade/engine": "*",
     "@arcade/event-schema": "*",

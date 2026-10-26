@@ -1,0 +1,32 @@
+{
+  "description": "Hard, 5 rounds, three players: walls are breached in rounds 4 and 5, and the strongest wall wins on the round limit. Recorded from the seeded thrower; waves come from the harness Rng.",
+  "players": ["Alex", "Jo", "Sam"],
+  "options": { "rounds": 5, "difficulty": "hard" },
+  "seed": "breach-a",
+  "visits": [
+    ["S16", "S4", "S1"],
+    ["S16", "S4", "S20"],
+    ["S16", "D4", "S20"],
+    ["S5", "S20", "S1"],
+    ["T20", "S9", "S12"],
+    ["S20", "S9", "T9"],
+    ["S20", "S14", "S9"],
+    ["MISS", "S12", "S9"],
+    ["T17", "S18", "S13"],
+    ["MISS", "S12", "S12"],
+    ["S17", "S17", "S13"],
+    ["T4", "S15", "S10"],
+    ["S10", "S2", "S15"],
+    ["S15", "S15", "S10"],
+    ["S15", "S6", "S6"]
+  ],
+  "expect": {
+    "finished": true,
+    "turns": 15,
+    "standings": [
+      { "player": "Sam", "rank": 1, "score": 9 },
+      { "player": "Jo", "rank": 2, "score": 6 },
+      { "player": "Alex", "rank": 3, "score": 2 }
+    ]
+  }
+}
