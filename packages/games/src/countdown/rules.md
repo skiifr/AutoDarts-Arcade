@@ -14,6 +14,10 @@ Classic x01: race from your start score down to exactly zero. 1–8 players.
 - **Double out** (on by default): your last dart must be a double or the bull.
 - **Single out**: any dart that reaches zero finishes.
 
+When a finish is possible with the darts you have left, the screen suggests a route, e.g.
+141: T20 · T19 · D12 (with single out, the shortest one). It is only a hint: any darts that
+reach zero the right way win.
+
 ## Bust
 
 Your turn ends at once, and your score goes back to what it was at the start of the

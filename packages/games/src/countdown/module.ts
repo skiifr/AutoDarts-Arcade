@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { replaceAt, seatOf, seatsFrom, type Seat } from '../shared/seats';
 import { rankStandings, winEffects, winnerHeadline } from '../shared/standings';
 import type { BaseView } from '../shared/view';
+import { checkoutHint } from './checkout';
 
 /** Countdown: classic x01. Rules for players are in `rules.md`. */
 export const countdownOptions = z.object({
@@ -70,6 +71,12 @@ export interface CountdownView extends BaseView {
   visit: (CountdownVisit & { playerId: string }) | null;
   /** A one-dart finish for the current player, e.g. "D16" or "BULL". */
   finish: string | null;
+  /**
+   * The suggested finish within the darts left this visit, e.g. ["T20", "T19", "D12"];
+   * the shortest finish with single out. Null when there is none (above 170, a bogey number,
+   * not started with double in, darts used up or bust) and once the game is over.
+   */
+  checkout: string[] | null;
 }
 
 function startVisit(seat: number, player: CountdownPlayer): CountdownVisit {
@@ -223,6 +230,8 @@ function view(state: CountdownState): CountdownView {
     headline = `${current.name} needs a double to start`;
   }
   const visit = state.visit ?? state.lastVisit;
+  // A visit in progress always belongs to the current player; a bust leaves no darts.
+  const dartsLeft = state.visit === null ? 3 : state.visit.bust ? 0 : 3 - state.visit.darts.length;
   return {
     gameId: 'countdown',
     headline,
@@ -253,6 +262,7 @@ function view(state: CountdownState): CountdownView {
     })),
     visit: visit ? { ...visit, playerId: players[visit.seat]!.playerId } : null,
     finish: finish?.label ?? null,
+    checkout: finished || !current.opened ? null : checkoutHint(current.remaining, { doubleOut: options.doubleOut, dartsLeft }),
   };
 }
 
