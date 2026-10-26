@@ -1,0 +1,21 @@
+{
+  "description": "Standard cricket: Alex closes everything while behind on points, then wins by scoring 54 on 18.",
+  "players": ["Alex", "Jo"],
+  "visits": [
+    ["T20", "T19", "T18"],
+    ["T20", "T20", "S20"],
+    ["T17", "T16", "S16"],
+    ["T15", "T15", "MISS"],
+    ["T15", "BULL", "25"],
+    ["T19", "MISS", "MISS"],
+    ["T18", "MISS", "MISS"]
+  ],
+  "expect": {
+    "finished": true,
+    "turns": 7,
+    "standings": [
+      { "player": "Alex", "rank": 1, "score": 70 },
+      { "player": "Jo", "rank": 2, "score": 45 }
+    ]
+  }
+}

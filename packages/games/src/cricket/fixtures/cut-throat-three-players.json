@@ -1,0 +1,26 @@
+{
+  "description": "Cut-throat with three players: Alex hands out points early, closes everything and wins on the fewest points.",
+  "players": ["Alex", "Jo", "Sam"],
+  "options": { "cutThroat": true },
+  "visits": [
+    ["T20", "T20", "MISS"],
+    ["T19", "T19", "MISS"],
+    ["T20", "T19", "S18"],
+    ["T19", "T18", "T17"],
+    ["T20", "MISS", "MISS"],
+    ["MISS"],
+    ["T16", "T15", "BULL"],
+    ["MISS"],
+    ["MISS"],
+    ["25"]
+  ],
+  "expect": {
+    "finished": true,
+    "turns": 10,
+    "standings": [
+      { "player": "Alex", "rank": 1, "score": 57 },
+      { "player": "Jo", "rank": 2, "score": 60 },
+      { "player": "Sam", "rank": 3, "score": 117 }
+    ]
+  }
+}

@@ -1,5 +1,6 @@
 import type { GameModule } from '@arcade/engine';
 import { countdown } from './countdown/module';
+import { cricket } from './cricket/module';
 
 export type { BaseView, ScoreRow } from './shared/view';
 
@@ -7,6 +8,7 @@ export type { BaseView, ScoreRow } from './shared/view';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- each module has its own option and state types
 export const GAMES: readonly GameModule<any, any, any>[] = [
   countdown,
+  cricket,
 ];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see GAMES
