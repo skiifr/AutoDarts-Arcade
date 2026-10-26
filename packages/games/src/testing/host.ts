@@ -13,6 +13,7 @@ import {
 } from '@arcade/engine';
 import {
   COMMAND_SCHEMA_VERSION,
+  DEFAULT_HOUSE_RULES,
   MISS,
   type ArcadeCommand,
   type ArcadeCommandType,
@@ -58,8 +59,9 @@ export function tickingClock(stepMs = 250): Clock {
  * visit ends with `SkipTurn`. It takes the same spec as `runSession` and returns the same
  * result, plus the event log, so the two can be compared turn for turn.
  *
- * - A short visit is padded with misses (`padMissing`, default true): the host only pads
- *   at an observed takeout, and a manual-mode visit has none.
+ * - A short visit is padded with misses (`padMissing`, default true) by the script itself, so
+ *   padded darts can be told apart; with padding off, the session's `missingDartsAreMisses`
+ *   house rule is off too, so the host's "Next player" padding leaves the visit short.
  * - After the game ends a visit early, scripted darts still on the board are added too: the
  *   host records them greyed out, and they never reach `onDart`.
  * - At the end the session is closed: `completed` if the game finished, else `abandoned`.
@@ -82,9 +84,7 @@ export async function runOnHost(game: AnyGame, spec: HostSessionSpec): Promise<H
   const clock = tickingClock();
   let eventCount = 0;
   let commandCount = 0;
-  /** Ids the host takes before it mints its own (see StartSession below). */
-  const handOut: string[] = [];
-  const ids: IdSource = () => handOut.shift() ?? ulidFromNumber(++eventCount, '0E');
+  const ids: IdSource = () => ulidFromNumber(++eventCount, '0E');
   const host = new SessionHost({
     store: new MemoryLogStore(),
     clock,
@@ -119,15 +119,22 @@ export async function runOnHost(game: AnyGame, spec: HostSessionSpec): Promise<H
     return events.find((e): e is EventOf<'DartAdded'> => e.type === 'DartAdded')!.payload.throwId;
   }
 
-  // StartSession carries no seed: the host mints the session id and then SessionStarted.rngSeed
-  // from its IdSource. Handing the seed to that second id gives the game the same Rng stream as
-  // `runSession` with this seed (the tests next to this file pin that order).
-  handOut.push(ulidFromNumber(++eventCount, '0E'), seed);
   const options = spec.options ?? {};
-  await send('StartSession', { gameId: game.manifest.id, options: options as Record<string, unknown>, players: [...players] });
+  // The script pads short visits itself (below), so the host's own "Next player" padding only
+  // matters when padding is off: turn it off there too, so a short visit stays short.
+  await send('StartSession', {
+    gameId: game.manifest.id,
+    options: options as Record<string, unknown>,
+    players: [...players],
+    rngSeed: seed,
+    ...(pad ? {} : { houseRules: { ...DEFAULT_HOUSE_RULES, missingDartsAreMisses: false } }),
+  });
 
   const turns: TurnLog[] = [];
   const padded = new Set<string>();
+  /** Darts this script added. The host's own "Next player" padding of a visit the game already
+   * closed (greyed, never scored) is left out of the turn log, as the harness never throws it. */
+  const ours = new Set<string>();
   while (turns.length < maxTurns) {
     const turn = snapshot().currentTurn;
     if (turn === null) break; // the game is over: in manual play a turn starts otherwise
@@ -140,13 +147,14 @@ export async function runOnHost(game: AnyGame, spec: HostSessionSpec): Promise<H
       if (now.currentTurn!.closedBy !== null) {
         // The game ended the visit: scripted darts still on the board are recorded, greyed out.
         const leftover = script?.[turnIndex]?.[dartIndex];
-        if (leftover) await addDart(at, dartIndex, leftover);
+        if (leftover) ours.add(await addDart(at, dartIndex, leftover));
         continue;
       }
       const thrown = source({ playerId, turnIndex, roundIndex, dartIndex, view: now.view });
       const segment = thrown ?? (pad ? MISS : null);
       if (segment === null) break;
       const throwId = await addDart(at, dartIndex, segment);
+      ours.add(throwId);
       if (thrown === null) padded.add(throwId);
     }
     await send('SkipTurn', {});
@@ -157,7 +165,7 @@ export async function runOnHost(game: AnyGame, spec: HostSessionSpec): Promise<H
       roundIndex,
       playerId,
       name: players.find((p) => p.playerId === playerId)!.displayName,
-      darts: ended.darts.map((d) => ({ label: d.segment.label, points: d.points, scored: d.scored, padded: padded.has(d.throwId) })),
+      darts: ended.darts.filter((d) => ours.has(d.throwId)).map((d) => ({ label: d.segment.label, points: d.points, scored: d.scored, padded: padded.has(d.throwId) })),
       endTurn: ended.closedBy,
       effects,
       view: after.view,
