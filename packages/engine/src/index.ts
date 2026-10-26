@@ -15,6 +15,6 @@ export {
   type PreviewResult,
   type SessionHostDeps,
 } from './host';
-export { MemoryLogStore } from './memory-log-store';
+export { LogAppendError, MemoryLogStore, checkAppend } from './memory-log-store';
 export { ulidFromNumber } from './ids';
 export { healthMetrics, type HealthMetrics } from './metrics';

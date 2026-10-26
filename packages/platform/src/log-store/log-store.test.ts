@@ -1,5 +1,5 @@
 import type { ArcadeEvent } from '@arcade/event-schema';
-import type { LogStore } from '@arcade/engine';
+import { MemoryLogStore as EngineMemoryLogStore, LogAppendError as EngineLogAppendError, type LogStore } from '@arcade/engine';
 import { describe, expect, it } from 'vitest';
 import { expoSqliteExecutor, type ExpoSqliteDatabaseLike } from './expo-sqlite';
 import { LogAppendError, MemoryLogStore } from './memory';
@@ -113,7 +113,14 @@ function contract(name: string, make: () => Promise<LogStore>): void {
   });
 }
 
-contract('MemoryLogStore', async () => new MemoryLogStore());
+describe('one MemoryLogStore', () => {
+  it('platform re-exports the engine’s store and error, so there is a single implementation', () => {
+    expect(MemoryLogStore).toBe(EngineMemoryLogStore);
+    expect(LogAppendError).toBe(EngineLogAppendError);
+  });
+});
+
+contract('MemoryLogStore (engine)', async () => new EngineMemoryLogStore());
 contract('SqliteLogStore on node:sqlite', async () => new SqliteLogStore(await nodeSqliteExecutor()));
 
 describe('SqliteLogStore specifics', () => {
