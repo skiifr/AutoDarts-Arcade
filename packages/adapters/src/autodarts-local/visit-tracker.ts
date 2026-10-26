@@ -323,14 +323,15 @@ export class VisitTracker {
    *
    * `resync`: after an outage the visit goes on only if the first listed dart is exactly a known
    * dart (with coordinates), or every known dart is still listed first, unchanged (§6.4's literal
-   * rule, without them).
+   * rule, without them). Without coordinates that match is a guess too: meanwhile the board may
+   * have withdrawn a dart and the player thrown another on the same segment (e2e seed 40041).
    */
   private align(T: readonly NormalizedThrow[], mode: ApplyMode): Alignment | null {
     const K = this.s.known;
     if (K.every((k) => k.coords) && T.every((t) => t.coords)) return this.alignByPlace(T, mode);
     if (mode === 'resync') {
       const prefix = K.length <= T.length && K.every((k, i) => relate(k, T[i] as NormalizedThrow) === 'same');
-      return prefix ? { toKnown: positions(T.length, K.length), doubtful: false } : null;
+      return prefix ? { toKnown: positions(T.length, K.length), doubtful: K.some((k) => !k.coords) } : null;
     }
     if (T.length >= K.length) {
       let unknown = 0;
@@ -454,10 +455,11 @@ export class VisitTracker {
     }
     if (T.length <= K.length) {
       if (this.allKnown(T)) {
-        // A partial removal.
+        // A partial removal. After an outage, a dart gone may not have been pulled, and one
+        // without coordinates may be another dart on the same segment: both are in doubt.
         if (mode === 'resync') {
           K.forEach((k, j) => {
-            if (!T.some((t) => relate(k, t) === 'same')) this.flagInDoubt(out, j);
+            if (!k.coords || !T.some((t) => relate(k, t) === 'same')) this.flagInDoubt(out, j);
           });
         }
         return;
@@ -486,7 +488,8 @@ export class VisitTracker {
    * After an outage, a visit with room for another dart may also have had one we never saw,
    * thrown and already pulled: then every dart of the visit is flagged. One throw, the walk to the
    * board and one pull take far less than a whole visit (`MIN_UNSEEN_VISIT_MS`), and no outage
-   * the adapter measures is short enough to rule them out, so this holds after any outage.
+   * the adapter measures is short enough to rule them out, so this holds after any outage. A
+   * dart without coordinates, matched on its segment alone, is flagged after an outage too.
    */
   private takeoutSeen(snap: Snapshot, out: TrackerFact[], mode: ApplyMode): void {
     const K = this.s.known;
@@ -503,8 +506,9 @@ export class VisitTracker {
       if (j >= 0) K[j] = this.updated(out, K[j] as KnownDart, T[i] as NormalizedThrow, false);
     });
     const unseenDartFits = mode === 'resync' && K.length + fresh < MAX_DARTS_PER_VISIT;
-    K.forEach((_, j) => {
-      if (!kept.has(j) || unseenDartFits) this.flagInDoubt(out, j);
+    K.forEach((k, j) => {
+      // After an outage, a dart without coordinates matched on its segment alone may be another.
+      if (!kept.has(j) || unseenDartFits || (mode === 'resync' && !k.coords)) this.flagInDoubt(out, j);
     });
     T.forEach((t, i) => {
       if (a.toKnown[i] === -1) this.detect(out, t, mode === 'resync');

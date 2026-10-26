@@ -316,11 +316,30 @@ describe('§6.4 resync and decision R', () => {
     expect(step(t, throwing(C2), 'resync')).toEqual(['takeout-end inferred', 'detect 0:S5 recovered']);
   });
 
-  it('without coordinates the literal prefix rule applies', () => {
+  it('without coordinates the literal prefix rule applies, and the darts it matched are a guess: flagged', () => {
     const t = withKnown(d('T20'), d('S5'));
-    expect(step(t, throwing(d('T20'), d('S5'), d('D1')), 'resync')).toEqual(['detect 2:D1 recovered']);
+    expect(step(t, throwing(d('T20'), d('S5'), d('D1')), 'resync')).toEqual(['update T20->T20 review', 'update S5->S5 review', 'detect 2:D1 recovered']);
     const u = withKnown(d('T20'), d('S5'));
     expect(step(u, throwing(d('T20'), d('S1')), 'resync')).toEqual(['takeout-end inferred', 'detect 0:T20 recovered', 'detect 1:S1 recovered']);
+  });
+
+  it.each([
+    // e2e seed 40041: offline, the board withdrew the MISS and the player threw another MISS.
+    ['the same visit, nothing new', [d('MISS')], throwing(d('MISS')), ['update MISS->MISS review']],
+    ['with coordinates the match is certain', [A], throwing(A), []],
+    ['a takeout first seen, three darts, none gone', [d('S1'), d('S2'), d('S3')], takeoutStarted(d('S1'), d('S2'), d('S3')), ['update S1->S1 review', 'update S2->S2 review', 'update S3->S3 review', 'takeout-start']],
+  ] as const)('after an outage, a dart without coordinates matched on its segment alone may be another dart: %s', (_label, known, snapshot, facts) => {
+    const t = withKnown(...known);
+    expect(step(t, snapshot, 'resync', 1000)).toEqual(facts);
+  });
+
+  it('a takeout seen before the outage, still on: darts without coordinates are in doubt after it', () => {
+    const t = withKnown(d('S1'), d('S2'), d('S3'));
+    step(t, takeoutStarted(d('S1'), d('S2'), d('S3')));
+    expect(step(t, takeoutStarted(d('S1'), d('S3')), 'resync', 1000)).toEqual(['update S1->S1 review', 'update S2->S2 review', 'update S3->S3 review']);
+    const u = withKnown(A, E, C);
+    step(u, takeoutStarted(A, E, C));
+    expect(step(u, takeoutStarted(A, C), 'resync', 1000)).toEqual(['update S12->S12 review']);
   });
 
   it('mid-takeout when the connection dropped, still taking out: the darts gone are kept, flagged', () => {
