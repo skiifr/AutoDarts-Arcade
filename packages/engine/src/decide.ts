@@ -313,6 +313,9 @@ export class Decider {
     if (!f.isFinished()) reject('not-finished', 'the game is not over');
     const open = f.unreviewedTurns();
     if (open.length > 0) reject('needs-review', `turns ${open.join(', ')} still need review`);
+    if (f.liveTurnUnreviewed()) {
+      reject('needs-review', `turn ${f.active?.turnIndex ?? f.turns.length} is still live and needs review: end it (takeout or Next player), then confirm it`);
+    }
   }
 
   private liveDart(throwId: string): DartRecord {
@@ -451,11 +454,7 @@ export class Decider {
     if (o.pad && f.houseRules.missingDartsAreMisses) {
       for (let i = f.liveCount(turn); i < 3; i++) this.pad(turn, i, o.causationId);
     }
-    const live = f.liveDarts(turn);
-    const needsReview =
-      o.flag ||
-      live.length > 3 ||
-      live.some((d) => d.origin === 'recovered' || f.boardDart(d.throwId)?.pendingReview === true);
+    const needsReview = o.flag || f.uncertainDarts(turn);
     this.batch.emit({
       type: 'TurnEnded',
       payload: {

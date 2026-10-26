@@ -309,6 +309,25 @@ export class SessionFolder {
     return [...this.unreviewed].sort((a, b) => a - b);
   }
 
+  /**
+   * The turn's darts alone would flag it when it ends (§7.5): a recovered or pendingReview
+   * dart, or more than three darts in one visit.
+   */
+  uncertainDarts(turn: TurnRecord): boolean {
+    const live = this.liveDarts(turn);
+    return live.length > 3 || live.some((d) => d.origin === 'recovered' || this.boardDarts.get(d.throwId)?.pendingReview === true);
+  }
+
+  /**
+   * The live turn counts as unreviewed before it ends: it holds darts that will flag it, or
+   * board darts are held for the turns after it. The winning turn stays live until its takeout,
+   * so without this a session could close as completed on an unchecked dart. (Nothing is held
+   * once the game is over, so for a finished game only the live turn's darts count.)
+   */
+  liveTurnUnreviewed(): boolean {
+    return (this.active !== null && this.uncertainDarts(this.active)) || this.heldVisits().length > 0;
+  }
+
   private gamePass(): GamePass {
     if (this.pass === null) throw new EngineError('host', 'no SessionStarted folded yet');
     this.pass.ensure(this.turns);
@@ -676,7 +695,7 @@ export class SessionFolder {
         ? { standings: finished.standings, provisional: this.closed?.outcome !== 'completed' }
         : null,
       standings,
-      canComplete: this.closed === null && finished !== null && unreviewed.length === 0,
+      canComplete: this.closed === null && finished !== null && unreviewed.length === 0 && !this.liveTurnUnreviewed(),
       closed: this.closed,
       board: { connection: this.connection, status: this.boardStatus },
       gameState: pass.state,

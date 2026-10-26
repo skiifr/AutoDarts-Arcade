@@ -255,6 +255,57 @@ describe('owner decision R: uncertain history is flagged, never guessed', () => 
     expect(types(abandoned)).toEqual(['SessionClosed']);
   });
 
+  describe('the winning turn is still live (its takeout has not come yet)', () => {
+    // The turn is only flagged when it ends, so the live winning turn's uncertain dart must
+    // count as unreviewed: closing or rematching then would make an unchecked result final.
+    async function race() {
+      const rig = makeRig();
+      await rig.run(rig.cmd.start('test-race', [A, B], { target: 20 }));
+      return rig;
+    }
+
+    it('refuses CloseSession{completed} and Rematch while it holds a recovered dart', async () => {
+      const rig = await race();
+      const { board, cmd } = rig;
+      await rig.run(board.connection('offline'), board.connection('resyncing'), board.dart(S20, { recovered: true }), board.connection('online'));
+      let s = rig.host.getSnapshot()!;
+      expect(s.phase).toBe('finished');
+      expect(s.turns[0]!.ended).toBe(false);
+      expect(s.canComplete).toBe(false);
+      const [close, rematch, abandon] = await rig.run(cmd.close('completed'), cmd.rematch(), cmd.close('abandoned'));
+      expect(close).toMatchObject({ status: 'rejected', reason: 'needs-review' });
+      expect(rematch).toMatchObject({ status: 'rejected', reason: 'needs-review' });
+      expect(types(abandon)).toEqual(['SessionClosed']);
+      s = rig.host.getSnapshot()!;
+      expect(s.closed?.outcome).toBe('abandoned');
+    });
+
+    it('refuses them while it holds a pendingReview dart, and accepts them once the turn ended and was confirmed', async () => {
+      const rig = await race();
+      const { board, cmd } = rig;
+      await rig.run(board.dart(S1, { pendingReview: true }), board.dart(S20));
+      expect(rig.host.getSnapshot()!.canComplete).toBe(false);
+      const [rematch, close] = await rig.run(cmd.rematch(), cmd.close('completed'));
+      expect(rematch).toMatchObject({ status: 'rejected', reason: 'needs-review' });
+      expect(close).toMatchObject({ status: 'rejected', reason: 'needs-review' });
+      const [end] = await rig.run(board.takeout());
+      expect(find(end, 'TurnEnded')[0]!.payload.needsReview).toBe(true);
+      expect(rig.host.getSnapshot()!.canComplete).toBe(false);
+      await rig.run(cmd.confirm(0));
+      expect(rig.host.getSnapshot()!.canComplete).toBe(true);
+      const [again] = await rig.run(cmd.rematch());
+      expect(types(again)[0]).toBe('SessionClosed');
+    });
+
+    it('accepts them at once when the live winning turn is certain', async () => {
+      const rig = await race();
+      await rig.run(rig.board.dart(S20));
+      expect(rig.host.getSnapshot()!.canComplete).toBe(true);
+      const [close] = await rig.run(rig.cmd.close('completed'));
+      expect(types(close)).toEqual(['SessionClosed']);
+    });
+  });
+
   it('refuses CloseSession{completed} before the game is over', async () => {
     const rig = await started();
     const [r] = await rig.run(rig.cmd.close('completed'));
