@@ -4,7 +4,7 @@ An arcade-style party-game frontend for an existing camera-scored steel-tip dart
 
 > **Status: Phase 0 (research and architecture).** There is no application code yet.
 > **Scope:** private home use. Target devices: iPhone, iPad, Android and a Fire TV Stick 4K Max, all installed directly with no store listings.
-> This is an independent community project. It is not affiliated with or endorsed by Autodarts GmbH, Winmau or BattleUp. "AutoDarts Arcade" is a working repo name, not the final product name.
+> This is an independent community project. It is not affiliated with or endorsed by Autodarts GmbH, Winmau or BattleUp. "AutoDarts Arcade" is the name for private home use, and would be revisited only if the app were ever published.
 
 | Document | What's in it |
 |---|---|
