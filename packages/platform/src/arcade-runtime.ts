@@ -29,7 +29,10 @@ import {
   type CommandOf,
   type HouseRules,
 } from '@arcade/event-schema';
+import type { ContactStore } from './contact-store';
 import { systemScheduler } from './runtime';
+
+export * from './contact-store';
 
 /** Something the runtime could not do, reported to `onError`. */
 export interface RuntimeProblem {
@@ -61,8 +64,16 @@ export interface ArcadeRuntimeOptions {
   fold?: FoldOptions;
   /** `source.adapterVersion` of events caused by commands. */
   uiVersion?: string;
-  /** Timers for the recovery pauses. Default: the system's (`systemScheduler`). */
+  /** Timers for the contact heartbeat and the recovery pauses. Default: the system's (`systemScheduler`). */
   scheduler?: Scheduler;
+  /**
+   * Where the last contact with the board is kept across a crash (§6.5). While the source is
+   * online and a session is open, the runtime records it every `CONTACT_EVERY_MS`, and
+   * `resumeSession` measures the outage from the later of it and the log's last reading. Without
+   * one, a resume after a quiet spell counts the whole spell as an outage, and may infer a
+   * takeout that never happened (§6.4). The app backs it with its key-value storage.
+   */
+  contactStore?: ContactStore;
   /**
    * Board facts have no caller to answer: a fact the host refused, and a fact it could not
    * persist, are reported here (with what was done about it, `RuntimeProblem.recovery`).
@@ -79,6 +90,12 @@ export type CommandPayload<T extends ArcadeCommandType> = CommandOf<T>['payload'
  * disk does not turn into a reconnect loop against the board.
  */
 export const RECOVERY_BACKOFF_MS: readonly number[] = [1000, 2000, 5000, 10_000];
+
+/** How often the runtime records its contact with an online board (`contactStore`). */
+export const CONTACT_EVERY_MS = 2000;
+
+/** A heartbeat this late means the app was frozen (suspended, asleep): it proves nothing (as the adapter's). */
+const LATE_TICK_MS = 500;
 
 type Listener = () => void;
 type EffectListener = (effects: readonly EngineEffect[]) => void;
@@ -119,8 +136,13 @@ export class ArcadeRuntime {
   private restoreOnStart = false;
   /** The latest SourceConnectionChanged said online. */
   private sourceOnline = false;
-  /** Wall-clock ms of the last fact received while the source was online: the board was in sight. */
+  /**
+   * Wall-clock ms of the last contact: a fact received, or an on-time heartbeat, while the source
+   * was online. The board was in sight then.
+   */
   private contactMs: number | null = null;
+  private contactTimer: TimerHandle | null = null;
+  private contactArmed: { mono: number; wall: number | undefined } = { mono: 0, wall: undefined };
 
   constructor(options: ArcadeRuntimeOptions) {
     this.o = options;
@@ -153,7 +175,7 @@ export class ArcadeRuntime {
     if (!this.running) return;
     this.running = false;
     this.clearRecoveryTimer();
-    this.sourceOnline = false;
+    this.setOnline(false);
     this.source.stop();
     this.unsubscribeSource?.();
     this.unsubscribeSource = null;
@@ -176,8 +198,9 @@ export class ArcadeRuntime {
   /**
    * Crash-resume (§6.5): rebuilds the host from the persisted log (`SessionHost.resume`) and the
    * source's visit state from the log's board facts (`rebuildVisitState`), then (re)starts the
-   * source if the runtime is running; its first connection resyncs against that state. Inputs
-   * that arrive meanwhile wait and go to the resumed host. Resolves with the resumed state.
+   * source if the runtime is running; its first connection resyncs against that state, measuring
+   * the outage from the last contact (the log's, or the `contactStore`'s if later). Inputs that
+   * arrive meanwhile wait and go to the resumed host. Resolves with the resumed state.
    */
   resumeSession(sessionId: string): Promise<SessionState | null> {
     return this.enqueue(async () => {
@@ -188,8 +211,10 @@ export class ArcadeRuntime {
         const host = await SessionHost.resume(this.hostDeps(), sessionId);
         if (restorable) {
           this.restoreOnStart = false;
-          this.restoreSource(this.restoredState(host));
+          this.restoreSource(this.restoredState(host, await this.storedContact(sessionId)));
         }
+        // A contact made while another session was open says nothing about this one's board.
+        if (this.current.getSnapshot()?.sessionId !== sessionId) this.contactMs = null;
         this.detachHost();
         this.current = host;
         this.attach(host);
@@ -244,7 +269,7 @@ export class ArcadeRuntime {
   // ── board facts ────────────────────────────────────────────────────────────
 
   private receive(fact: BoardFactDraft): void {
-    if (fact.type === 'SourceConnectionChanged') this.sourceOnline = fact.payload.state === 'online';
+    if (fact.type === 'SourceConnectionChanged') this.setOnline(fact.payload.state === 'online');
     if (this.sourceOnline) this.noteContact(epochMsFromIso(fact.occurredAt));
     const gen = this.sourceGen;
     void this.enqueue(() => this.apply(fact, gen));
@@ -309,7 +334,7 @@ export class ArcadeRuntime {
   /** Stops the source on the runtime's behalf (it emits nothing about it). */
   private stopSource(): void {
     this.clearRecoveryTimer();
-    this.sourceOnline = false;
+    this.setOnline(false);
     this.source.stop();
   }
 
@@ -320,21 +345,76 @@ export class ArcadeRuntime {
 
   /**
    * The source's visit state from `host`'s log, with the last time the board was in sight: the
-   * log's own (`observedAt`, from the latest reading it holds) or this runtime's, whichever is
-   * later. Contact counts only up to LINK_LOSS_MS before it, as for any connection that ends
-   * (§6.4): frames sent just before may never have arrived.
+   * log's own (`observedAt`, from the latest reading it holds) or the runtime's contact (this
+   * run's while it played this session, or `stored` from before a crash), whichever is later. A
+   * contact counts only up to LINK_LOSS_MS before it, as for any connection that ends (§6.4):
+   * frames the board sent just before may never have arrived. The adapter's `restore()` takes it
+   * as `observedAt`.
    */
-  private restoredState(host: SessionHost): RestoredVisitState {
+  private restoredState(host: SessionHost, stored?: string): RestoredVisitState {
     const state = rebuildVisitState(host.getLog().filter((e) => isBoardFact(e)), this.o.ids);
     const fromLog = state.observedAt === undefined ? undefined : epochMsFromIso(state.observedAt);
-    const contact = this.contactMs === null ? undefined : this.contactMs - LINK_LOSS_MS;
-    const observed = Math.max(fromLog ?? -Infinity, contact ?? -Infinity);
-    if (Number.isFinite(observed) && observed !== fromLog) state.observedAt = isoFromEpochMs(observed);
+    const storedMs = stored === undefined ? undefined : epochMsFromIso(stored);
+    const playing = this.current.getSnapshot()?.sessionId;
+    const sameSession = playing !== undefined && host.getSnapshot()?.sessionId === playing;
+    const live = sameSession && this.contactMs !== null ? this.contactMs : undefined;
+    const contacts = [live, storedMs].filter((ms): ms is number => ms !== undefined);
+    const contact = contacts.length === 0 ? undefined : Math.max(...contacts) - LINK_LOSS_MS;
+    if (contact !== undefined && (fromLog === undefined || contact > fromLog)) state.observedAt = isoFromEpochMs(contact);
     return state;
   }
 
   private noteContact(ms: number | undefined): void {
     if (ms !== undefined && (this.contactMs === null || ms > this.contactMs)) this.contactMs = ms;
+  }
+
+  // ── contact heartbeat (ContactStore) ────────────────────────────────────────
+
+  private setOnline(online: boolean): void {
+    this.sourceOnline = online;
+    if (online) this.armContactTick();
+    else if (this.contactTimer !== null) {
+      this.scheduler.clearTimeout(this.contactTimer);
+      this.contactTimer = null;
+    }
+  }
+
+  private armContactTick(): void {
+    if (this.o.contactStore === undefined || this.contactTimer !== null) return;
+    this.contactArmed = { mono: this.scheduler.now(), wall: epochMsFromIso(this.o.clock()) };
+    this.contactTimer = this.scheduler.setTimeout(() => this.contactTick(), CONTACT_EVERY_MS);
+  }
+
+  /**
+   * While the source is online the board's state is known: it pushes every change, and the
+   * adapter reconnects at once when it cannot. So an on-time heartbeat is contact. A late one
+   * (the app was frozen) proves nothing, as in the adapter.
+   */
+  private contactTick(): void {
+    this.contactTimer = null;
+    if (!this.running || !this.sourceOnline) return;
+    const wall = epochMsFromIso(this.o.clock());
+    const limit = CONTACT_EVERY_MS + LATE_TICK_MS;
+    const onTime =
+      this.scheduler.now() - this.contactArmed.mono <= limit &&
+      (wall === undefined || this.contactArmed.wall === undefined || wall - this.contactArmed.wall <= limit);
+    const snapshot = this.current.getSnapshot();
+    if (onTime && wall !== undefined) {
+      this.noteContact(wall);
+      if (snapshot !== null && snapshot.closed === null) {
+        this.o.contactStore!.set(snapshot.sessionId, isoFromEpochMs(wall)).catch((error: unknown) => this.report({ error }));
+      }
+    }
+    this.armContactTick();
+  }
+
+  private async storedContact(sessionId: string): Promise<string | undefined> {
+    try {
+      return await this.o.contactStore?.get(sessionId);
+    } catch (error) {
+      this.report({ error });
+      return undefined;
+    }
   }
 
   private clearRecoveryTimer(): void {

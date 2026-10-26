@@ -3,6 +3,7 @@ import { ulidFromNumber } from '@arcade/engine';
 import { isBoardFact, makeSegment, type BoardFactDraft } from '@arcade/event-schema';
 import { describe, expect, it, vi } from 'vitest';
 import { createArcadeRuntime } from './arcade-runtime';
+import { MemoryContactStore } from './contact-store';
 import { REGISTRY, incarnate, makePlayers, makeWorld, type World } from './testing/pipeline';
 
 const PLAYERS = makePlayers(2);
@@ -328,6 +329,80 @@ describe('a failed log append of a board fact', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+/**
+ * Crash-resume on an idle board (§6.5). The log holds board facts only, and an idle board sends
+ * none, so the log's last contact can be long before the crash. The runtime keeps its own
+ * (`ContactStore`, written every 2 s while the board is online) and the resume measures the
+ * outage from the later of the two: a quick restart on an idle, empty board infers nothing.
+ */
+describe('crash-resume measures the outage from the last contact (ContactStore)', () => {
+  async function idleThenCrash(seed: string, idleMs: number, resumeAfterMs: number, contacts = new MemoryContactStore()) {
+    const world = makeWorld(seed);
+    const inc = incarnate(world, 0, { contacts });
+    inc.runtime.start();
+    await world.sched.advance(500);
+    await inc.runtime.command('StartSession', COUNTDOWN);
+    const sessionId = inc.runtime.getSnapshot()!.sessionId;
+    await world.sched.advance(300);
+    for (const seg of ['S1', 'S2', 'S3']) {
+      world.board.throwDart({ segment: seg });
+      await world.sched.advance(800);
+    }
+    world.board.startTakeout();
+    await world.sched.advance(1000);
+    world.board.finishTakeout();
+    await world.sched.advance(idleMs); // player 2 walks up; nothing happens on the board
+    await inc.runtime.whenIdle();
+    const before = inc.runtime.getSnapshot()!;
+    inc.kill(); // the app dies
+    await world.sched.advance(resumeAfterMs);
+    const next = incarnate(world, 1, { contacts });
+    await next.runtime.resumeSession(sessionId);
+    next.runtime.start();
+    await world.sched.advance(2000);
+    await next.runtime.whenIdle();
+    return { world, contacts, before, after: next.runtime.getSnapshot()! };
+  }
+
+  it.each([1000, 8000, 60_000])('idle %i ms after a takeout, a crash and an immediate restart: the waiting player keeps the turn', async (idleMs) => {
+    const { before, after, contacts } = await idleThenCrash(`idle-${idleMs}`, idleMs, 0);
+    expect(before.phase).toBe('playing');
+    expect(after.phase).toBe('playing');
+    expect(after.currentPlayerId).toBe(PLAYERS[1]!.playerId);
+    expect(after.turns.map((t) => t.needsReview)).toEqual([false, false]);
+    expect(after.awaitingReviewTurn).toBeNull();
+    if (idleMs > 2000) expect(contacts.writes).toBeGreaterThan(0);
+  });
+
+  it('a restart after the board was out of sight long enough for a whole visit still infers a takeout, flagged', async () => {
+    const { after } = await idleThenCrash('idle-long-down', 8000, 6000);
+    expect(after.phase).toBe('awaiting-review');
+    expect(after.turns[1]!.needsReview).toBe(true);
+  });
+
+  it('writes the contact at most every 2 s, only while the board is online and a session is open, and keeps it per session', async () => {
+    const contacts = new MemoryContactStore();
+    const world = makeWorld('contact-writes');
+    const inc = incarnate(world, 0, { contacts });
+    inc.runtime.start();
+    await world.sched.advance(10_000);
+    expect(contacts.writes).toBe(0); // no session yet
+    await inc.runtime.command('StartSession', COUNTDOWN);
+    const sessionId = inc.runtime.getSnapshot()!.sessionId;
+    await world.sched.advance(10_000);
+    expect(contacts.writes).toBeGreaterThanOrEqual(4);
+    expect(contacts.writes).toBeLessThanOrEqual(5);
+    const at = await contacts.get(sessionId);
+    expect(world.simMs(at!)).toBeGreaterThan(world.sched.now() - 2100);
+    world.transport.setReachable(false);
+    await world.sched.advance(50);
+    const offline = contacts.writes;
+    await world.sched.advance(10_000);
+    expect(contacts.writes).toBe(offline);
+    expect(await contacts.get('01JBX0000000000000000OTHER')).toBeUndefined();
   });
 });
 

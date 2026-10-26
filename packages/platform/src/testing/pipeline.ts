@@ -23,6 +23,7 @@ import { MemoryLogStore, gameRegistry, ulidFromNumber, type GameRegistry, type H
 import type { ArcadeEvent, BoardFactDraft, PlayerRef } from '@arcade/event-schema';
 import { GAMES } from '@arcade/games';
 import { createArcadeRuntime, type ArcadeRuntime, type RuntimeProblem } from '../arcade-runtime';
+import type { ContactStore } from '../contact-store';
 
 export const EPOCH = SIM_EPOCH_MS;
 export const REGISTRY: GameRegistry = gameRegistry(GAMES);
@@ -110,6 +111,8 @@ export interface Incarnation {
   errors: string[];
   /** Every problem the runtime reported, recovered or not. */
   problems: RuntimeProblem[];
+  /** The app dies: what it had in flight never reaches the storage, and it does nothing more. */
+  kill(): void;
 }
 
 function describeProblem(p: RuntimeProblem): string {
@@ -117,7 +120,7 @@ function describeProblem(p: RuntimeProblem): string {
 }
 
 /** One launch of the app on the world. `n` keeps each launch's ids apart. */
-export function incarnate(world: World, n: number, options: { stateOnlySocket?: boolean } = {}): Incarnation {
+export function incarnate(world: World, n: number, options: { stateOnlySocket?: boolean; contacts?: ContactStore } = {}): Incarnation {
   const ids = createUlidSource({ now: () => EPOCH + world.sched.now(), random: seededRandom(`ids:${world.seed}:${n}`) });
   const adapter = new AutodartsLocalAdapter({
     transport: world.transport,
@@ -131,19 +134,36 @@ export function incarnate(world: World, n: number, options: { stateOnlySocket?: 
   const errors: string[] = [];
   const problems: RuntimeProblem[] = [];
   adapter.subscribe((f) => facts.push(f));
+  // This launch's view of the device storage: once it dies, its writes never land.
+  let alive = true;
+  const store: LogStore = {
+    append: (sessionId, events) => (alive ? world.store.append(sessionId, events) : new Promise<void>(() => {})),
+    load: (sessionId) => world.store.load(sessionId),
+    listSessions: () => world.store.listSessions(),
+  };
+  const contacts = options.contacts;
+  const contactStore: ContactStore | undefined = contacts && {
+    get: (sessionId) => contacts.get(sessionId),
+    set: (sessionId, at) => (alive ? contacts.set(sessionId, at) : Promise.resolve()),
+  };
   const runtime = createArcadeRuntime({
     source: adapter,
-    store: world.store,
+    store,
     games: REGISTRY,
     clock: world.clock,
     ids,
     scheduler: world.sched,
+    ...(contactStore ? { contactStore } : {}),
     onError: (p) => {
       problems.push(p);
       if (p.recovery === undefined || p.recovery === 'none') errors.push(describeProblem(p));
     },
   });
-  return { adapter, runtime, facts, errors, problems };
+  const kill = (): void => {
+    alive = false;
+    runtime.stop();
+  };
+  return { adapter, runtime, facts, errors, problems, kill };
 }
 
 export function makePlayers(n: number): PlayerRef[] {
