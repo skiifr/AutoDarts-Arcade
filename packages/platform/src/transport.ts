@@ -9,7 +9,7 @@ import {
   type HttpResponse,
   type Transport,
 } from '@arcade/adapters';
-import { isPrivateHost } from './address';
+import { canonicalIpHost, isPrivateHost } from './address';
 
 /**
  * `Transport` over the global `fetch` and `WebSocket`, which React Native and Node 22 both
@@ -17,7 +17,9 @@ import { isPrivateHost } from './address';
  * - the endpoint allowlist (owner decision S: GET /api/state, /api/version,
  *   /api/state/stats, /api/cams/stats and WS /api/events[?type=state]; nothing else,
  *   no other method), checked again at runtime even though the types already forbid it;
- * - a private board address (loopback, RFC 1918, link-local, `.local`);
+ * - a private board address: a canonical IP literal on the home network (`address.ts`).
+ *   Every URL is built from the canonical host, which is checked again before each request
+ *   and each socket, so what is checked is what a URL parser will reach;
  * - request timeouts, no redirects, and size caps on bodies and frames.
  */
 
@@ -106,7 +108,8 @@ interface Globals {
 export function createBoardTransport(options: BoardTransportOptions): Transport {
   const g = globalThis as unknown as Globals;
   const port = options.port ?? BOARD_PORT;
-  if (!isPrivateHost(options.host)) {
+  const host = canonicalIpHost(options.host);
+  if (host === null || !isPrivateHost(host)) {
     throw new BoardRequestRefused(`${options.host} is not a private board address`);
   }
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new BoardRequestRefused(`invalid port ${port}`);
@@ -115,12 +118,17 @@ export function createBoardTransport(options: BoardTransportOptions): Transport 
   const Abort = options.AbortController ?? g.AbortController;
   const maxBody = options.maxBodyBytes ?? DEFAULT_MAX_BYTES;
   const maxFrame = options.maxFrameBytes ?? DEFAULT_MAX_BYTES;
-  const origin = `${options.host}:${port}`;
+
+  /** The URL of an allowlisted path, from the canonical host, checked again here before every request and socket. */
+  const boardUrl = (scheme: 'http' | 'ws', pathWithQuery: string): string => {
+    if (!isPrivateHost(host)) throw new BoardRequestRefused(`${host} is not a private board address`);
+    return `${scheme}://${host}:${port}${pathWithQuery}`;
+  };
 
   async function get(path: BoardGetPath, call?: { timeoutMs?: number }): Promise<HttpResponse> {
     assertAllowed('GET', path);
     if (!doFetch) throw new Error('fetch is not available');
-    const url = `http://${origin}${path}`;
+    const url = boardUrl('http', path);
     const timeoutMs = call?.timeoutMs ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const controller = Abort ? new Abort() : undefined;
     let timer: unknown;
@@ -154,6 +162,7 @@ export function createBoardTransport(options: BoardTransportOptions): Transport 
   function openEvents(opts: { stateOnly: boolean }, handlers: EventsSocketHandlers): EventsSocket {
     const path = opts.stateOnly ? `${BOARD_EVENTS_PATH}?${BOARD_EVENTS_QUERY}` : BOARD_EVENTS_PATH;
     assertAllowed('WS', path);
+    const url = boardUrl('ws', path);
     let closed = false;
     const finish = (info: { code?: number; reason?: string; error?: string }): void => {
       if (closed) return;
@@ -166,7 +175,7 @@ export function createBoardTransport(options: BoardTransportOptions): Transport 
     }
     let ws: WebSocketLike;
     try {
-      ws = new Ws(`ws://${origin}${path}`);
+      ws = new Ws(url);
     } catch (e) {
       g.setTimeout(() => finish({ error: e instanceof Error ? e.message : String(e) }), 0);
       return { close: () => finish({ code: 1000 }) };

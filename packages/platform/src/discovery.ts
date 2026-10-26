@@ -40,7 +40,10 @@ export interface KeyValueStorage {
 
 const LAST_KNOWN_KEY = 'arcade.board.lastKnownAddress';
 
-/** The last board address that worked. Invalid or non-private stored values are ignored. */
+/**
+ * The last board address that worked. A stored value that fails today's check (a name, a
+ * leading-zero IPv4, a public address saved by an older build) is discarded on load.
+ */
 export class LastKnownAddress {
   private readonly storage: KeyValueStorage;
 
@@ -52,7 +55,9 @@ export class LastKnownAddress {
     const raw = await this.storage.getItem(LAST_KNOWN_KEY);
     if (raw === null) return null;
     const parsed = parseBoardAddress(raw);
-    return parsed.ok ? parsed.address : null;
+    if (parsed.ok) return parsed.address;
+    await Promise.resolve(this.storage.removeItem?.(LAST_KNOWN_KEY)).catch(() => undefined);
+    return null;
   }
 
   async set(address: BoardAddress): Promise<void> {

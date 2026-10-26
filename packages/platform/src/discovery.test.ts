@@ -63,6 +63,32 @@ describe('last-known address', () => {
     const lk = new LastKnownAddress(memoryStorage({ 'arcade.board.lastKnownAddress': '8.8.8.8' }));
     expect(await lk.get()).toBeNull();
     await expect(lk.set({ host: 'example.com', port: 3180 })).rejects.toThrow();
+    await expect(lk.set({ host: '010.0.0.5', port: 3180 })).rejects.toThrow();
+  });
+
+  it.each(['010.0.0.5', '172.016.0.1:3181', 'autodarts.local', 'localhost:3180', '8.8.8.8', 'garbage'])(
+    'discards a saved %j that fails the check, on load',
+    async (saved) => {
+      const storage = memoryStorage({ 'arcade.board.lastKnownAddress': saved });
+      expect(await new LastKnownAddress(storage).get()).toBeNull();
+      expect(storage.data).toEqual({});
+    },
+  );
+
+  it('keeps a saved address that passes, in canonical form', async () => {
+    const storage = memoryStorage({ 'arcade.board.lastKnownAddress': '[FE80:0:0:0:0:0:0:1]:3181' });
+    expect(await new LastKnownAddress(storage).get()).toEqual({ host: '[fe80::1]', port: 3181 });
+  });
+
+  it('a storage that fails to remove still gives null', async () => {
+    const storage: KeyValueStorage = {
+      getItem: async () => 'autodarts.local',
+      setItem: async () => {},
+      removeItem: async () => {
+        throw new Error('read-only');
+      },
+    };
+    expect(await new LastKnownAddress(storage).get()).toBeNull();
   });
 
   it('BoardDiscovery offers the last-known board when it answers', async () => {

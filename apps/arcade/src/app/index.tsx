@@ -336,7 +336,7 @@ export default function ConnectScreen() {
             {scan?.running ? 'Looking…' : scan ? 'No boards found' : 'No boards found yet'}
           </AText>
           <AText variant="caption" color="textMute">
-            Scan your network, or enter the address shown in the Autodarts app.
+            Scan your network, or enter the IP address shown in the Autodarts app.
           </AText>
         </View>
       ) : null}
@@ -366,7 +366,7 @@ export default function ConnectScreen() {
   const manual = (
     <Panel style={{ gap: s(space.md) }}>
       <AText variant="label" color="textMute" upper>
-        Or enter the board&apos;s address
+        Or enter the board&apos;s IP address
       </AText>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: s(space.sm) }}>
         <TextInput

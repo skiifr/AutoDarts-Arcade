@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { formatBoardAddress, isPrivateHost, parseBoardAddress } from './address';
-import { BoardRequestRefused, createBoardTransport, utf8Length, type FetchLike, type ResponseLike, type WebSocketLike } from './transport';
+import { BoardRequestRefused, createBoardTransport, utf8Length, type FetchLike, type ResponseLike, type WebSocketCtor, type WebSocketLike } from './transport';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -13,54 +12,41 @@ const ok = (body: string, extra: Partial<ResponseLike> = {}): ResponseLike => ({
   ...extra,
 });
 
-describe('board addresses', () => {
-  it.each([
-    ['127.0.0.1', true],
-    ['10.0.0.7', true],
-    ['172.16.0.1', true],
-    ['172.31.255.254', true],
-    ['192.168.1.40', true],
-    ['169.254.10.20', true],
-    ['autodarts.local', true],
-    ['my-board.local', true],
-    ['localhost', true],
-    ['[::1]', true],
-    ['[fe80::1]', true],
-    ['[fd12:3456::1]', true],
-    ['172.32.0.1', false],
-    ['172.15.0.1', false],
-    ['8.8.8.8', false],
-    ['192.169.0.1', false],
-    ['100.64.0.1', false],
-    ['example.com', false],
-    ['autodarts.local.evil.com', false],
-    ['[2001:db8::1]', false],
-    ['999.168.1.1', false],
-  ])('%s private: %s', (host, expected) => {
-    expect(isPrivateHost(host)).toBe(expected);
-  });
-
-  it('parses what people type', () => {
-    expect(parseBoardAddress(' 192.168.1.40 ')).toEqual({ ok: true, address: { host: '192.168.1.40', port: 3180 } });
-    expect(parseBoardAddress('192.168.1.40:3181')).toEqual({ ok: true, address: { host: '192.168.1.40', port: 3181 } });
-    expect(parseBoardAddress('Autodarts.LOCAL')).toEqual({ ok: true, address: { host: 'autodarts.local', port: 3180 } });
-    expect(parseBoardAddress('[FE80::1]:3180')).toEqual({ ok: true, address: { host: '[fe80::1]', port: 3180 } });
-    expect(formatBoardAddress({ host: '192.168.1.40', port: 3180 })).toBe('192.168.1.40');
-    expect(formatBoardAddress({ host: '192.168.1.40', port: 81 })).toBe('192.168.1.40:81');
-  });
-
-  it.each(['', 'http://192.168.1.40', '192.168.1.40/api/config', '8.8.8.8', 'board.example.com', '192.168.1.40:0', '192.168.1.40:abc', 'fe80::1'])(
-    'refuses %j',
-    (input) => {
-      expect(parseBoardAddress(input).ok).toBe(false);
-    },
-  );
-});
-
 describe('HTTP transport', () => {
   it('refuses a public address at creation', () => {
     expect(() => createBoardTransport({ host: '8.8.8.8', fetch: vi.fn<FetchLike>() })).toThrow(BoardRequestRefused);
     expect(() => createBoardTransport({ host: 'example.com', fetch: vi.fn<FetchLike>() })).toThrow(BoardRequestRefused);
+  });
+
+  it.each(['010.0.0.5', '172.016.0.1', '192.168.01.40', '0x0a.0.0.1', 'autodarts.local', 'localhost'])(
+    'refuses %s before any request or socket: a URL parser would not read it as a private address',
+    (host) => {
+      const fetch = vi.fn<FetchLike>();
+      const Ws = vi.fn();
+      expect(() => createBoardTransport({ host, fetch, WebSocket: Ws as unknown as WebSocketCtor })).toThrow(BoardRequestRefused);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(Ws).not.toHaveBeenCalled();
+    },
+  );
+
+  it('builds every request URL from the canonical host', async () => {
+    const urls: string[] = [];
+    const fetch: FetchLike = async (url) => {
+      urls.push(url);
+      return ok('2.0.2');
+    };
+    await createBoardTransport({ host: '[FE80:0:0:0:0:0:0:1]', fetch }).get('/api/version');
+    await createBoardTransport({ host: '192.168.1.40', port: 80, fetch }).get('/api/version');
+    expect(urls).toEqual(['http://[fe80::1]:3180/api/version', 'http://192.168.1.40:80/api/version']);
+    const sockets: string[] = [];
+    class RecordingWs extends FakeWs {
+      constructor(url: string) {
+        super(url);
+        sockets.push(url);
+      }
+    }
+    createBoardTransport({ host: '[FD12:3456:0:0:0:0:0:1]', fetch, WebSocket: RecordingWs }).openEvents({ stateOnly: true }, { onOpen() {}, onMessage() {}, onClose() {} });
+    expect(sockets).toEqual(['ws://[fd12:3456::1]:3180/api/events?type=state']);
   });
 
   it('returns status and body', async () => {
