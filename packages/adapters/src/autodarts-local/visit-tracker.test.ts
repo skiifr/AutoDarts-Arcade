@@ -351,7 +351,10 @@ describe('Wi-Fi blips: a takeout is inferred only when the board was away long e
 
   it.each([
     // [situation, tracker, snapshot, away ms, facts]
-    ['nothing known, empty board, blip', nothingKnown, takeoutFinished(), 2000, []],
+    ['nothing known, empty board, blip', nothingKnown, takeoutFinished(), 1000, []],
+    ['the threshold is 2 s: just under', nothingKnown, takeoutFinished(), 1999, []],
+    ['the threshold is 2 s: at it', nothingKnown, takeoutFinished(), 2000, ['takeout-end inferred']],
+    ['nothing known, a dart after an outage of 2.7 s', nothingKnown, throwing(E), 2700, ['takeout-end inferred', 'detect 0:S12 recovered']],
     ['nothing known, empty board, just under the threshold', nothingKnown, takeoutFinished(), S - 1, []],
     ['nothing known, empty board, at the threshold', nothingKnown, takeoutFinished(), S, ['takeout-end inferred']],
     ['nothing known, empty board, long outage', nothingKnown, takeoutFinished(), 60_000, ['takeout-end inferred']],

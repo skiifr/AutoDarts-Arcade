@@ -388,7 +388,7 @@ export class AutodartsLocalAdapter implements BoardSource {
   private connectionLost(error: string, socketWasQuiet = false): void {
     // A socket that went quiet may have been dead since its last frame: heartbeats since then
     // proved nothing.
-    if (socketWasQuiet) this.contact = { ...this.evidence };
+    if (socketWasQuiet) this.capContact(this.evidence);
     else this.endContact();
     this.gen++;
     this.teardown();
@@ -532,19 +532,23 @@ export class AutodartsLocalAdapter implements BoardSource {
     if (evidence) this.evidence = { ...at };
   }
 
-  /** The connection ends (it broke, or we let it go): contact counts only up to LINK_LOSS_MS before now. */
+  /**
+   * The connection ends (it broke, or we let it go): contact counts only up to LINK_LOSS_MS before
+   * now, whatever arrived last. A frame or read that came in during that second proves the board's
+   * state when it was sent, but the frames after it may be the ones lost with the link, and it may
+   * itself have been late; counting it would make the outage come out shorter than the time the
+   * board was really out of sight.
+   */
   private endContact(): void {
     if (this.phase !== 'online') return;
-    const cap = { mono: this.o.scheduler.now() - LINK_LOSS_MS, wall: this.wallNow() };
-    if (cap.wall !== null) cap.wall -= LINK_LOSS_MS;
-    const e = this.evidence;
-    const c = this.contact;
-    const pick = (cv: number | null, capv: number | null, ev: number | null): number | null => {
-      if (cv === null) return ev;
-      const capped = capv === null ? cv : Math.min(cv, capv);
-      return ev === null ? capped : Math.max(ev, capped);
-    };
-    this.contact = { mono: pick(c.mono, cap.mono, e.mono), wall: pick(c.wall, cap.wall, e.wall) };
+    this.capContact(this.contact);
+  }
+
+  /** Sets contact to `from`, but no later than LINK_LOSS_MS before now. */
+  private capContact(from: { mono: number | null; wall: number | null }): void {
+    const wall = this.wallNow();
+    const cap = (v: number | null, now: number | null): number | null => (v === null || now === null ? v : Math.min(v, now - LINK_LOSS_MS));
+    this.contact = { mono: cap(from.mono, this.o.scheduler.now()), wall: cap(from.wall, wall) };
   }
 
   private restoreContact(state: RestoredVisitState | undefined): void {

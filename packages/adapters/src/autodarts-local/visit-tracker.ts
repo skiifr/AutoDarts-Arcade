@@ -82,12 +82,14 @@ export type TrackerFact =
 export type ApplyMode = 'live' | 'resync';
 
 /**
- * The shortest time in which a whole visit can come and go unseen: someone throws, the board
- * detects the dart, and the darts are pulled out (owner decision, Phase 2/3 integration). A
- * resync with no known darts infers a takeout only if the board was out of sight at least
- * this long; shorter outages cannot hide one.
+ * The shortest time in which a whole visit can come and go unseen: someone throws one dart, the
+ * board detects it, and the dart is pulled out (owner decision: 2 s; it was 5 s, but a visit of
+ * one dart thrown and pulled fits in under 3 s). A resync with no known darts infers a takeout
+ * only if the board was out of sight at least this long; shorter outages cannot hide one. The
+ * adapter measures the outage from at least `LINK_LOSS_MS` before the link broke, so it never
+ * comes out shorter than the time the board was out of sight.
  */
-export const MIN_UNSEEN_VISIT_MS = 5000;
+export const MIN_UNSEEN_VISIT_MS = 2000;
 
 const RECENT_VISITS = 2;
 
