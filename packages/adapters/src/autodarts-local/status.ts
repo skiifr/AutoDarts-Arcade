@@ -75,11 +75,14 @@ export interface AdapterProfile {
 }
 
 /**
- * Version-specific behaviour (RISK R01). 2.x: the owner reports `?type=state` is the dart
- * feed on 2.0.2. Older or unknown versions open the bare path, as HomeDarts and DartLab
- * do; the adapter filters frames by `type` either way.
+ * Version-specific behaviour (RISK R01). Every version opens the bare `/api/events` and the
+ * adapter filters frames by `type`: both community clients (HomeDarts, DartLab) do, and so
+ * does DartLab's real 2.0.2 capture. `?type=state` comes only from a static inspection of
+ * the 2.0.2 binary and is unverified on a live board, so it stays opt-in
+ * (`AutodartsLocalOptions.stateOnlySocket`). Kept as a function for the version-specific
+ * quirks still to come.
  */
 export function profileFor(version: string | undefined): AdapterProfile {
-  const major = version === undefined ? NaN : Number(version.split('.')[0]);
-  return { stateOnlySocket: major === 2 };
+  void version;
+  return { stateOnlySocket: false };
 }

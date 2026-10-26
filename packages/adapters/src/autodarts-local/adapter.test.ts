@@ -18,7 +18,7 @@ describe('autodarts-local adapter: a normal visit', () => {
     const rig = await onlineRig();
     expect(states(rig)).toEqual(['connecting', 'resyncing', 'online']);
     expect(rig.adapter.version).toBe('2.0.2');
-    expect(rig.transport.requests.map((r) => `${r.kind} ${r.path}`)).toEqual(['GET /api/version', 'WS /api/events?type=state', 'GET /api/state']);
+    expect(rig.transport.requests.map((r) => `${r.kind} ${r.path}`)).toEqual(['GET /api/version', 'WS /api/events', 'GET /api/state']);
 
     for (const s of ['T20', 'M12', 'BULL']) {
       rig.board.throwDart({ segment: s });
@@ -36,9 +36,21 @@ describe('autodarts-local adapter: a normal visit', () => {
     expect(afterVersion.every((f) => f.source.upstreamVersion === '2.0.2' && f.source.adapterVersion === 'autodarts-local@0.1.0')).toBe(true);
   });
 
-  it('opens the bare events path for boards older than 2.x', async () => {
-    const rig = await onlineRig({ board: { version: '1.0.7' } });
+  it.each(['1.0.7', '2.0.2', '2.1.0-beta.5', 'garbage'])('opens the bare events path for version %s', async (version) => {
+    const rig = await onlineRig({ board: { version, noiseFrames: true } });
     expect(rig.transport.requests.find((r) => r.kind === 'WS')?.path).toBe('/api/events');
+    // Frames of other types share the socket and are filtered out.
+    rig.board.throwDart({ segment: 'S7' });
+    rig.board.startTakeout();
+    rig.board.finishTakeout();
+    await rig.sched.advance(50);
+    expect(rig.transport.deliveredFrames.some((f) => f.startsWith('{"type":"motion_state"'))).toBe(true);
+    expect(brief(rig.facts).filter((f) => !f.startsWith('anomaly version'))).toEqual(['detect 0:S7', 'takeout-start', 'takeout-end']);
+  });
+
+  it('opens /api/events?type=state only when asked to', async () => {
+    const rig = await onlineRig({ stateOnlySocket: true });
+    expect(rig.transport.requests.find((r) => r.kind === 'WS')?.path).toBe('/api/events?type=state');
   });
 
   it('confirms a withdrawal with a poll before retracting the dart', async () => {

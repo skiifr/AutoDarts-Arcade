@@ -73,7 +73,10 @@ export interface AutodartsLocalOptions {
   random: RandomSource;
   /** Visit state rebuilt from the log after a crash (`rebuildVisitState`). */
   restored?: VisitState;
-  /** Force the socket form; by default it follows the board version (`profileFor`). */
+  /**
+   * Open `/api/events?type=state` instead of the bare path. Default: the version profile
+   * (`profileFor`), which opens the bare path for every version and filters frames by type.
+   */
   stateOnlySocket?: boolean;
   timing?: Partial<AdapterTiming>;
   /** Diagnostics buffer; one is created when omitted. */

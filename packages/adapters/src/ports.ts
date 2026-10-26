@@ -36,7 +36,7 @@ export interface EventsSocket {
 export interface Transport {
   /** Rejects on network failure or timeout; resolves with any HTTP status. */
   get(path: BoardGetPath, options?: { timeoutMs?: number }): Promise<HttpResponse>;
-  /** Opens `WS /api/events`, with `?type=state` when `stateOnly` is set. */
+  /** Opens `WS /api/events` (bare by default), with `?type=state` only when `stateOnly` is set. */
   openEvents(options: { stateOnly: boolean }, handlers: EventsSocketHandlers): EventsSocket;
 }
 

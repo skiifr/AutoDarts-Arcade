@@ -15,10 +15,11 @@ export type BoardGetPath = (typeof BOARD_GET_PATHS)[number];
 export const BOARD_EVENTS_PATH = '/api/events';
 
 /**
- * The one query the events socket may carry. The owner reports that
- * `ws://<board>:3180/api/events?type=state` is the dart feed on Autodarts 2.0.2. The
- * community clients (HomeDarts, DartLab) open the bare path and filter frames by their
- * `type`; the adapter filters too, so both forms work.
+ * The one query the events socket may carry, and only when asked for
+ * (`stateOnlySocket`). By default the adapter opens the bare path and filters frames by
+ * their `type`, as the community clients (HomeDarts, DartLab) and DartLab's real 2.0.2
+ * capture do; `?type=state` comes from a static inspection of the 2.0.2 binary and is
+ * unverified on a live board. The allowlist accepts both forms.
  */
 export const BOARD_EVENTS_QUERY = 'type=state';
 
