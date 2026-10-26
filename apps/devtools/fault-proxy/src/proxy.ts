@@ -10,6 +10,10 @@ import { isAllowedBoardRequest, seededRandom } from '@arcade/adapters';
  * frames: drop, duplicate, delay, reorder, and cut the socket every N frames. Everything
  * else is answered 403 and logged, so the proxy also shows whether a client ever asks
  * for a forbidden route.
+ *
+ * A socket to the board is opened only after the app's WebSocket handshake has completed,
+ * and every one is tracked: it is closed when either side fails or closes, and by
+ * `cutAll()` and `close()`, whether it is relaying or still connecting.
  */
 
 export interface FaultProxyOptions {
@@ -46,7 +50,7 @@ export interface FaultProxyStats {
 export interface FaultProxy {
   port: number;
   stats: FaultProxyStats;
-  /** Close every relayed socket now. */
+  /** Close every app socket and its board socket now, relaying or still connecting. Returns how many pairs. */
   cutAll(): number;
   /** While on, refuse all requests and sockets, like a board that left the network. */
   setOutage(on: boolean): void;
@@ -60,8 +64,10 @@ export async function startFaultProxy(o: FaultProxyOptions): Promise<FaultProxy>
   const log = o.log ?? (() => {});
   const random = seededRandom(o.seed ?? 'fault-proxy');
   const stats: FaultProxyStats = { framesIn: 0, framesOut: 0, dropped: 0, duplicated: 0, reordered: 0, cuts: 0, httpForwarded: 0, blocked: 0 };
-  const pairs = new Set<{ client: WebSocket; upstream: WebSocket }>();
+  /** Every app socket with its board socket, from the moment the board socket is opened (connecting or relaying). */
+  const pairs = new Set<{ client: WebSocket; upstream: WebSocket; end(): void }>();
   let outage = false;
+  let closing = false;
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const path = req.url ?? '/';
@@ -109,28 +115,29 @@ export async function startFaultProxy(o: FaultProxyOptions): Promise<FaultProxy>
   const wss = new WebSocketServer({ noServer: true });
   server.on('upgrade', (req, socket, head) => {
     const path = req.url ?? '/';
-    if (outage || !isAllowedBoardRequest('WS', path)) {
-      if (!outage) {
+    if (closing || outage || !isAllowedBoardRequest('WS', path)) {
+      if (!closing && !outage) {
         stats.blocked++;
         log(`BLOCKED socket ${path} (not on the board allowlist)`);
       }
       socket.destroy();
       return;
     }
-    const upstream = new WebSocket(`ws://${o.target.host}:${o.target.port}${path}`, { maxPayload: MAX_BODY });
-    upstream.once('error', (e) => {
-      log(`upstream socket ${path} failed: ${e.message}`);
-      socket.destroy();
-    });
-    upstream.once('open', () => {
-      wss.handleUpgrade(req, socket, head, (client) => relay(client, upstream, path));
+    socket.on('error', () => socket.destroy());
+    // The app's handshake first: ws answers a bad one with 400 (or drops a socket that is
+    // already gone) and never calls back, so nothing is opened to the board for it.
+    wss.handleUpgrade(req, socket, head, (client) => {
+      if (closing || outage) {
+        client.terminate();
+        return;
+      }
+      relay(client, path);
     });
   });
 
-  function relay(client: WebSocket, upstream: WebSocket, path: string): void {
-    const pair = { client, upstream };
-    pairs.add(pair);
-    log(`relaying ${path}`);
+  /** Opens the board socket for an app socket that completed its handshake, and relays between them. */
+  function relay(client: WebSocket, path: string): void {
+    const upstream = new WebSocket(`ws://${o.target.host}:${o.target.port}${path}`, { maxPayload: MAX_BODY });
     let lastAt = 0;
     let relayed = 0;
     const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -141,6 +148,13 @@ export async function startFaultProxy(o: FaultProxyOptions): Promise<FaultProxy>
       upstream.terminate();
       log(`closed ${path}`);
     };
+    const pair = { client, upstream, end };
+    pairs.add(pair);
+    upstream.once('open', () => log(`relaying ${path}`));
+    upstream.on('error', (e) => {
+      log(`upstream socket ${path} failed: ${e.message}`);
+      end();
+    });
     const deliver = (text: string, at: number): void => {
       const t = setTimeout(() => {
         timers.delete(t);
@@ -179,10 +193,10 @@ export async function startFaultProxy(o: FaultProxyOptions): Promise<FaultProxy>
       }
     });
     client.on('message', () => log('dropped a message from the app (the board socket is receive-only)'));
+    // Either side ending, before or after the board socket opened, ends both.
     upstream.on('close', end);
     client.on('close', end);
     client.on('error', end);
-    upstream.on('error', end);
   }
 
   await new Promise<void>((resolve, reject) => {
@@ -190,12 +204,10 @@ export async function startFaultProxy(o: FaultProxyOptions): Promise<FaultProxy>
     server.listen(o.listenPort, o.listenHost ?? '0.0.0.0', () => resolve());
   });
 
+  /** Ends every pair, relaying or still connecting to the board. */
   const cutAll = (): number => {
     const n = pairs.size;
-    for (const p of [...pairs]) {
-      p.client.terminate();
-      p.upstream.terminate();
-    }
+    for (const p of [...pairs]) p.end();
     stats.cuts += n;
     return n;
   };
@@ -212,7 +224,8 @@ export async function startFaultProxy(o: FaultProxyOptions): Promise<FaultProxy>
       return outage;
     },
     close: async () => {
-      cutAll();
+      closing = true;
+      for (const p of [...pairs]) p.end();
       wss.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
