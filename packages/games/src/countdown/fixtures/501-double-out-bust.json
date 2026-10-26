@@ -1,0 +1,22 @@
+{
+  "description": "501 double out: Alex busts on 141, then checks out 141 with T20 T19 D12.",
+  "players": ["Alex", "Jo"],
+  "options": { "start": 501 },
+  "visits": [
+    ["T20", "T20", "T20"],
+    ["T20", "S20", "S5"],
+    ["T20", "T20", "T20"],
+    ["T19", "T19", "S19"],
+    ["T20", "T20", "T20"],
+    ["T20", "T20", "T20"],
+    ["T20", "T19", "D12"]
+  ],
+  "expect": {
+    "finished": true,
+    "turns": 7,
+    "standings": [
+      { "player": "Alex", "rank": 1, "score": 0 },
+      { "player": "Jo", "rank": 2, "score": 103 }
+    ]
+  }
+}

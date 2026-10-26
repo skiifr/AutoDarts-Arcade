@@ -1,0 +1,23 @@
+{
+  "description": "301 double in, single out, three players: Sam opens late and Alex finishes with a single 1.",
+  "players": ["Alex", "Jo", "Sam"],
+  "options": { "start": 301, "doubleIn": true, "doubleOut": false },
+  "visits": [
+    ["S20", "D20", "S20"],
+    ["D10", "T20", "T20"],
+    ["S20", "S20", "S20"],
+    ["T20", "T20", "T20"],
+    ["T20", "T20", "S1"],
+    ["D20"],
+    ["T20", "S1"]
+  ],
+  "expect": {
+    "finished": true,
+    "turns": 7,
+    "standings": [
+      { "player": "Alex", "rank": 1, "score": 0 },
+      { "player": "Jo", "rank": 2, "score": 40 },
+      { "player": "Sam", "rank": 3, "score": 261 }
+    ]
+  }
+}
