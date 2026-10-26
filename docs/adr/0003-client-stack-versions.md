@@ -30,4 +30,5 @@
 
 - Upgrade both together: bumping the Expo SDK means switching to the matching `react-native-tvos` line, per Expo's TV guide.
 - The bundle ID and package `io.github.skiifr.autodartsarcade` are placeholders. Change them before the first TestFlight upload if you want a different ID. They cannot change afterwards without creating a new app record.
-- Not yet proven on hardware: native iOS and Android builds, the Fire TV focus engine, and Reanimated performance on the 4K Max. These are part of the Phase 1 install dry run (ROADMAP P1, item 7).
+- Native builds are compiled in CI by `.github/workflows/native.yml`: Android phone, Android TV (`EXPO_TV=1`) and the iOS simulator, unsigned. That proves they compile only once the workflow is green on GitHub.
+- Not yet proven on hardware: installing on the devices, the Fire TV focus engine, and Reanimated performance on the 4K Max. These are part of the Phase 1 install dry run (ROADMAP P1, item 7).
