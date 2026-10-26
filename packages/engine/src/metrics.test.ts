@@ -53,7 +53,8 @@ async function eventfulSession() {
     cmd.confirm(4),
   );
 
-  // Turn 5 (B): manual mode, which says nothing about the board.
+  // Turn 5 (B): manual mode, which says nothing about the board. It follows a review pause, so
+  // whether B was really up is a guess: needsReview.
   await rig.run(cmd.add(B.playerId, 5, 0, S20, 'manual-mode'), cmd.add(B.playerId, 5, 1, S20, 'manual-mode'), cmd.skip());
   return rig;
 }
@@ -73,7 +74,7 @@ describe('healthMetrics (ROADMAP H1)', () => {
       misreadRate: 1 / 6,
       bounceOuts: 1,
       falseDetections: 1,
-      needsReviewTurns: 2,
+      needsReviewTurns: 3,
       reconnects: 2,
       disconnects: 2,
       stuckTakeouts: 2,

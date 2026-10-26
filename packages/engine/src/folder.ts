@@ -1,5 +1,7 @@
 import {
+  isBoardFact,
   points,
+  sameSegment,
   type ArcadeEvent,
   type EventOf,
   type EventSource,
@@ -72,6 +74,12 @@ export interface TurnRecord {
     paddingApplies: boolean;
   } | null;
   reviewed: boolean;
+  /**
+   * Started when a review pause ended (by ConfirmTurn, or as its held visits ended). The outage
+   * behind the pause may have hidden any number of visits, so whether this player is really up
+   * is the game's guess: the turn is flagged.
+   */
+  readonly afterReview: boolean;
   rev: number;
 }
 
@@ -84,6 +92,13 @@ export interface BoardDart {
   /** The adapter could not read its latest segment (`pendingReview`): its turn is flagged. */
   pendingReview: boolean;
   withdrawn: boolean;
+  /**
+   * The board said something about this dart that a person's earlier word overrides: it
+   * updated a dart the person voided, re-read one they corrected as something else, or
+   * withdrew one they corrected. The person wins (Decider), but the board's ids follow its own
+   * positions, so the fact may really be about another dart: its turn is flagged.
+   */
+  disputed: boolean;
   /** What was going on when the board reported it. */
   readonly phase: 'baseline' | 'turn' | 'review' | 'idle';
   readonly eventId: string;
@@ -151,6 +166,12 @@ export class SessionFolder {
   readonly paused: PauseReason[] = [];
   awaitingReviewTurn: number | null = null;
   private readonly unreviewed = new Set<number>();
+  /**
+   * A review pause has just ended and its release is running: the engine events that follow
+   * GameResumed{review} (held darts thrown, their visits ended, turns started) until the next
+   * board fact or person's input. Every turn started meanwhile is `afterReview`.
+   */
+  private releasing = false;
   lastGameFinished: { seq: number; standings: readonly Standing[] } | null = null;
   lastTurnStartedSeq = 0;
   closed: { outcome: 'completed' | 'abandoned'; finalStandings: readonly Standing[] } | null = null;
@@ -201,6 +222,7 @@ export class SessionFolder {
     for (const t of this.unreviewed) c.unreviewed.add(t);
     c.lastGameFinished = this.lastGameFinished;
     c.lastTurnStartedSeq = this.lastTurnStartedSeq;
+    c.releasing = this.releasing;
     c.closed = this.closed;
     for (const id of this.causationIds) c.causationIds.add(id);
     for (const [turn, cached] of this.viewCache) c.viewCache.set(turn, cached);
@@ -272,27 +294,73 @@ export class SessionFolder {
 
   /**
    * What a review pause is holding for the turns after it, in the order it happened: each
-   * visit with held board darts (in board order), and each visit with no darts that the board
+   * visit with held board darts (in board order), each visit with no darts that the board
    * may have ended offline (`TakeoutFinished{inferred}` with nothing held: a whole visit may
-   * have come and gone). Empty while the game is over: there is no next turn to hold for.
+   * have come and gone), and each visit that ended after the board withdrew every dart it
+   * held (`withdrawn`: it still was a visit). `lastSeq`: the latest of those darts, so only a
+   * visit end after it closes the visit. Empty while the game is over: there is no next turn
+   * to hold for.
    */
-  heldVisits(): { visit: VisitRecord; darts: BoardDart[] }[] {
+  heldVisits(): { visit: VisitRecord; darts: BoardDart[]; withdrawn: number; lastSeq: number }[] {
     if (this.heldOrder.length === 0 || this.isFinished()) return [];
-    const out: { visit: VisitRecord; darts: BoardDart[] }[] = [];
+    const out: { visit: VisitRecord; darts: BoardDart[]; withdrawn: number; lastSeq: number }[] = [];
     for (const key of this.heldOrder) {
       const visit = this.visits.get(key)!;
       const darts: BoardDart[] = [];
-      for (const id of visit.throwIds) if (this.held.has(id)) darts.push(this.boardDarts.get(id)!);
+      let withdrawn = 0;
+      let lastSeq = 0;
+      for (const id of visit.throwIds) {
+        const bd = this.boardDarts.get(id)!;
+        if (this.held.has(id)) darts.push(bd);
+        else if (bd.phase === 'review' && bd.withdrawn && bd.attributedTo === null) withdrawn++;
+        else continue;
+        lastSeq = Math.max(lastSeq, bd.seq);
+      }
       const end = visit.ended;
       const pendingEnd =
-        visit.owner === null && end !== null && end.kind === 'takeout' && end.inferred && !this.consumedEnds.has(end.eventId);
-      if (darts.length > 0 || pendingEnd) out.push({ visit, darts });
+        visit.owner === null &&
+        end !== null &&
+        !this.consumedEnds.has(end.eventId) &&
+        ((end.kind === 'takeout' && end.inferred) || (withdrawn > 0 && darts.length === 0));
+      if (darts.length > 0 || pendingEnd) out.push({ visit, darts, withdrawn, lastSeq });
     }
     return out;
   }
 
   unreviewedTurns(): number[] {
     return [...this.unreviewed].sort((a, b) => a - b);
+  }
+
+  /**
+   * The turn will be flagged when it ends, whatever ends it (§7.5): a recovered or pendingReview
+   * dart, more than three darts in one visit, a dart the board and a person disagree about
+   * (`BoardDart.disputed`, voided ones too), or a review pause behind it. A review pause holds
+   * the game after a takeout that may have happened offline, and the outage may have hidden any
+   * number of visits (or none). So whoever the game names next when it ends (`afterReview`),
+   * and whoever gets the darts that arrived meanwhile (held darts, also in the turns after that),
+   * is a guess.
+   */
+  flaggedAtEnd(turn: TurnRecord): boolean {
+    const live = this.liveDarts(turn);
+    return (
+      turn.afterReview ||
+      live.length > 3 ||
+      turn.entries.some((d) => this.boardDarts.get(d.throwId)?.disputed === true) ||
+      live.some((d) => {
+        const bd = this.boardDarts.get(d.throwId);
+        return d.origin === 'recovered' || bd?.pendingReview === true || bd?.phase === 'review';
+      })
+    );
+  }
+
+  /**
+   * The live turn counts as unreviewed before it ends: it holds darts that will flag it, or
+   * board darts are held for the turns after it. The winning turn stays live until its takeout,
+   * so without this a session could close as completed on an unchecked dart. (Nothing is held
+   * once the game is over, so for a finished game only the live turn's darts count.)
+   */
+  liveTurnUnreviewed(): boolean {
+    return (this.active !== null && this.flaggedAtEnd(this.active)) || this.heldVisits().length > 0;
   }
 
   private gamePass(): GamePass {
@@ -342,13 +410,16 @@ export class SessionFolder {
     if (e.seq !== this.lastSeq + 1) corrupt(`expected seq ${this.lastSeq + 1}, got ${e.seq}`);
     if (this.closed) corrupt(`event ${e.seq} follows SessionClosed`);
     this.lastSeq = e.seq;
+    if (e.type === 'GameResumed' && e.payload.reason === 'review') this.releasing = true;
+    else if (isBoardFact(e) || e.source.kind === 'manual') this.releasing = false;
+    const afterReview = this.releasing;
     if (e.causationId !== undefined) this.causationIds.add(e.causationId);
 
     switch (e.type) {
       case 'SessionStarted':
         return this.onSessionStarted(e);
       case 'TurnStarted':
-        return this.onTurnStarted(e);
+        return this.onTurnStarted(e, afterReview);
       case 'DartThrown':
         return this.onDartThrown(e);
       case 'DartAdded':
@@ -394,6 +465,8 @@ export class SessionFolder {
         return this.onDartDetected(e);
       case 'DartUpdated': {
         const bd = this.boardDarts.get(e.payload.throwId);
+        const rec = this.darts.get(e.payload.throwId);
+        if (bd && rec && this.overrules(rec, bd) && (rec.voided !== null || !sameSegment(rec.segment, e.payload.segment))) this.dispute(bd);
         if (bd) {
           bd.segment = e.payload.segment;
           const pending = e.payload.pendingReview === true;
@@ -406,6 +479,8 @@ export class SessionFolder {
       }
       case 'DartWithdrawn': {
         const bd = this.boardDarts.get(e.payload.throwId);
+        const rec = this.darts.get(e.payload.throwId);
+        if (bd && rec && rec.voided === null && this.overrules(rec, bd)) this.dispute(bd);
         if (bd) {
           bd.withdrawn = true;
           this.held.delete(bd.throwId);
@@ -451,7 +526,7 @@ export class SessionFolder {
     );
   }
 
-  private onTurnStarted(e: EventOf<'TurnStarted'>): void {
+  private onTurnStarted(e: EventOf<'TurnStarted'>, afterReview: boolean): void {
     const p = e.payload;
     if (this.active) corrupt(`turn ${p.turnIndex} started while turn ${this.active.turnIndex} is live`);
     if (p.turnIndex !== this.turns.length) corrupt(`expected turn ${this.turns.length}, got ${p.turnIndex}`);
@@ -464,6 +539,7 @@ export class SessionFolder {
       entries: [],
       end: null,
       reviewed: false,
+      afterReview,
       rev: 0,
     };
     this.turns.push(turn);
@@ -562,6 +638,7 @@ export class SessionFolder {
       recovered: p.recovered === true,
       pendingReview: p.pendingReview === true,
       withdrawn: false,
+      disputed: false,
       phase,
       eventId: e.eventId,
       seq: e.seq,
@@ -576,6 +653,21 @@ export class SessionFolder {
       this.held.add(bd.throwId);
       this.holdVisit(bd.visitKey);
     }
+  }
+
+  /**
+   * A person's word about `rec` stands over the board's (a correction, or a void other than the
+   * board's own withdrawal), and the board is not just clearing a visit it reset.
+   */
+  private overrules(rec: DartRecord, bd: BoardDart): boolean {
+    const byPerson = rec.userCorrected || (rec.voided !== null && rec.voided !== 'source-withdrawn');
+    return byPerson && this.visits.get(bd.visitKey)?.ended?.kind !== 'reset';
+  }
+
+  private dispute(bd: BoardDart): void {
+    if (bd.disputed) return;
+    bd.disputed = true;
+    if (bd.attributedTo !== null) this.touch(bd.attributedTo);
   }
 
   /** Between turns, waiting for a person to confirm a turn that ended on an inferred takeout. */
@@ -662,7 +754,7 @@ export class SessionFolder {
         ? { standings: finished.standings, provisional: this.closed?.outcome !== 'completed' }
         : null,
       standings,
-      canComplete: this.closed === null && finished !== null && unreviewed.length === 0,
+      canComplete: this.closed === null && finished !== null && unreviewed.length === 0 && !this.liveTurnUnreviewed(),
       closed: this.closed,
       board: { connection: this.connection, status: this.boardStatus },
       gameState: pass.state,

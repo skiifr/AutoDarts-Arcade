@@ -132,7 +132,10 @@ export interface SessionState<State = unknown, View = unknown> {
   finished: { standings: readonly Standing[]; provisional: boolean } | null;
   /** `GameModule.result()` of the current state. */
   standings: readonly Standing[] | null;
-  /** `CloseSession{completed}` (and Rematch) would be accepted: finished, and no unreviewed turn. */
+  /**
+   * `CloseSession{completed}` (and Rematch) would be accepted: finished, no unreviewed turn, and
+   * the live turn (the winning visit before its takeout) holds no dart that will flag it.
+   */
   canComplete: boolean;
   closed: { outcome: 'completed' | 'abandoned'; finalStandings: readonly Standing[] } | null;
 

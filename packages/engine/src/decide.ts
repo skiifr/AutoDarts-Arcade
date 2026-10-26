@@ -190,13 +190,14 @@ export class Decider {
           break;
         }
         if (!this.visitBelongsTo(fact.payload.visitKey, turn)) break;
-        if (f.liveCount(turn) === 0) {
+        const ending = this.visitEnding(turn, fact.payload.visitKey);
+        if (ending.empty) {
           if (f.houseRules.emptyTakeoutSkipsTurn) {
             this.endTurn({ ...base, reason: 'manual-skip', pad: false, flag: false, reviewPause: false });
           }
           break;
         }
-        this.endTurn({ ...base, reason: 'takeout', pad: true, flag: false, reviewPause: false });
+        this.endTurn({ ...base, reason: 'takeout', pad: true, flag: ending.unsure, reviewPause: false });
         break;
       }
       case 'VisitReset': {
@@ -205,7 +206,8 @@ export class Decider {
           break;
         }
         const turn = f.active;
-        if (!turn || !this.visitBelongsTo(fact.payload.visitKey, turn) || f.liveCount(turn) === 0) break;
+        if (!turn || !this.visitBelongsTo(fact.payload.visitKey, turn)) break;
+        if (this.visitEnding(turn, fact.payload.visitKey).empty) break;
         // A reset ends the board visit, but nobody saw whether the visit was complete: flag it.
         this.endTurn({
           reason: 'takeout',
@@ -311,6 +313,9 @@ export class Decider {
     if (!f.isFinished()) reject('not-finished', 'the game is not over');
     const open = f.unreviewedTurns();
     if (open.length > 0) reject('needs-review', `turns ${open.join(', ')} still need review`);
+    if (f.liveTurnUnreviewed()) {
+      reject('needs-review', `turn ${f.active?.turnIndex ?? f.turns.length} is still live and needs review: end it (takeout or Next player), then confirm it`);
+    }
   }
 
   private liveDart(throwId: string): DartRecord {
@@ -375,7 +380,7 @@ export class Decider {
    */
   private releaseHeld(): void {
     const f = this.f;
-    for (const { visit, darts } of f.heldVisits()) {
+    for (const { visit, darts, withdrawn, lastSeq } of f.heldVisits()) {
       for (const bd of darts) {
         if (!f.active) return;
         this.throwDart(bd, f.active);
@@ -383,15 +388,18 @@ export class Decider {
       if (!f.active) return;
       const end = visit.ended;
       // Only an end the board reported after these darts closes their visit.
-      if (end === null || end.seq < (darts.at(-1)?.seq ?? 0)) continue;
+      if (end === null || end.seq < lastSeq) continue;
       const base = { source: this.engine, occurredAt: this.batch.now, causationId: end.eventId };
       if (end.kind === 'takeout' && end.inferred) {
         this.endTurn({ ...base, reason: 'takeout', pad: false, flag: true, reviewPause: true });
         return; // later held darts wait for this new review
       }
-      if (f.liveCount(f.active) === 0) continue;
+      // As for a live visit (visitEnding): a held visit whose darts the board all withdrew still
+      // ended, on the board's word alone.
+      const unsure = f.liveCount(f.active) === 0;
+      if (unsure && withdrawn === 0) continue;
       if (end.kind === 'reset') this.endTurn({ ...base, reason: 'takeout', pad: false, flag: true, reviewPause: false });
-      else this.endTurn({ ...base, reason: 'takeout', pad: true, flag: false, reviewPause: false });
+      else this.endTurn({ ...base, reason: 'takeout', pad: true, flag: unsure, reviewPause: false });
     }
   }
 
@@ -413,6 +421,24 @@ export class Decider {
     this.checkFinished(bd.eventId);
   }
 
+  /**
+   * How an observed takeout or a reset of `visitKey` ends `turn`. A visit that had a dart in this
+   * turn ended it, even if every one of them was voided since: the next visit is the next
+   * player's. Only a visit that never had a dart (and a turn with nothing live) is an empty
+   * takeout, a hand in front of the cameras. `unsure`: nothing of the turn is left live and the
+   * board withdrew one of its darts, so whether this was a real visit is the board's word alone
+   * (it may have been a phantom and a hand): flag the turn (owner decision R).
+   */
+  private visitEnding(turn: TurnRecord, visitKey: string): { empty: boolean; unsure: boolean } {
+    const f = this.f;
+    const live = f.liveCount(turn);
+    const ofVisit = turn.entries.filter((d) => f.boardDart(d.throwId)?.visitKey === visitKey);
+    return {
+      empty: live === 0 && ofVisit.length === 0,
+      unsure: live === 0 && ofVisit.some((d) => d.voided === 'source-withdrawn'),
+    };
+  }
+
   /** Does a takeout of `visitKey` end `turn`? Not if the visit's darts belong to an earlier turn or the baseline. */
   private visitBelongsTo(visitKey: string, turn: TurnRecord): boolean {
     const f = this.f;
@@ -428,11 +454,7 @@ export class Decider {
     if (o.pad && f.houseRules.missingDartsAreMisses) {
       for (let i = f.liveCount(turn); i < 3; i++) this.pad(turn, i, o.causationId);
     }
-    const live = f.liveDarts(turn);
-    const needsReview =
-      o.flag ||
-      live.length > 3 ||
-      live.some((d) => d.origin === 'recovered' || f.boardDart(d.throwId)?.pendingReview === true);
+    const needsReview = o.flag || f.flaggedAtEnd(turn);
     this.batch.emit({
       type: 'TurnEnded',
       payload: {
