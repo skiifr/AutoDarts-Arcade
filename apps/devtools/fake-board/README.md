@@ -11,10 +11,16 @@ documented shapes (ARCHITECTURE §4.3, 🟡):
 | `GET /api/version` | plain text, `2.0.2` by default |
 | `GET /api/state/stats`, `GET /api/cams/stats` | `{"fps": …}`, `{"fps": [ … ]}` |
 | `WS /api/events` (also `?type=state`) | `state` frames; `motion_state` too unless `?type=state` |
+| `OPTIONS` on the four GET routes | 204, a CORS preflight answer that allows GET only |
 | anything else | 404 (405 for non-GET), and logged |
 
 It never implements `/api/reset`, `/api/config` or `/api/system`; a request for one shows
 up in the log.
+
+The four GET routes send permissive CORS headers (`Access-Control-Allow-Origin: *`), so the
+browser preview of the app (`yarn web`, http://localhost:8081) can read the fake board from
+another origin. A real board probably sends none, so the browser preview can't reach a real
+board. Use a native build for that (see `apps/arcade/README.md`).
 
 ## Run
 

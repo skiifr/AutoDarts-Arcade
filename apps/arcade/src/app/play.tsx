@@ -51,7 +51,7 @@ function bannerFor(kind: ShellBanner, state: ShellState): BannerProps | null {
         tone: 'cyan',
         icon: '⚠',
         title: 'This turn needs review',
-        detail: 'Darts were recovered after a reconnect. Check them before play continues.',
+        detail: 'Some darts were recovered after a reconnect, so check them.',
         action: { label: 'Fix', onPress: () => router.push('/fix') },
       };
     case 'stuck':

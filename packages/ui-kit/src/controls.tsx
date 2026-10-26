@@ -302,22 +302,26 @@ export interface DartChipProps {
   label?: string;
   points?: number;
   state: DartChipState;
+  /** `lg` for read-at-a-distance chips (the dart ticker). */
+  size?: 'md' | 'lg';
 }
 
 /** One dart of a turn: "① T20 60". Purely visual; wrap in Focusable to make it selectable. */
-export function DartChip({ index, label, points, state }: DartChipProps) {
+export function DartChip({ index, label, points, state, size = 'md' }: DartChipProps) {
   const { s } = useLayout();
+  const lg = size === 'lg';
   const border =
     state === 'selected' ? palette.gold : state === 'adjusted' ? palette.cyan : state === 'add' ? palette.lineHi : palette.line;
+  const dot = lg ? 30 : 20;
   return (
     <View
       style={{
         flexDirection: 'row',
         alignItems: 'center',
-        gap: s(space.sm),
-        paddingVertical: s(6),
-        paddingHorizontal: s(space.md),
-        borderRadius: s(radius.md),
+        gap: s(lg ? space.md : space.sm),
+        paddingVertical: s(lg ? 12 : 6),
+        paddingHorizontal: s(lg ? space.lg : space.md),
+        borderRadius: s(lg ? radius.lg : radius.md),
         borderWidth: s(1.5),
         borderStyle: state === 'add' ? 'dashed' : 'solid',
         borderColor: border,
@@ -326,23 +330,23 @@ export function DartChip({ index, label, points, state }: DartChipProps) {
     >
       <View
         style={{
-          width: s(20),
-          height: s(20),
-          borderRadius: s(10),
+          width: s(dot),
+          height: s(dot),
+          borderRadius: s(dot / 2),
           alignItems: 'center',
           justifyContent: 'center',
           backgroundColor: state === 'empty' ? palette.line : palette.gold,
         }}
       >
-        <AText variant="caption" color={state === 'empty' ? 'textMute' : 'onGold'} style={{ fontWeight: '900' }}>
+        <AText variant={lg ? 'label' : 'caption'} color={state === 'empty' ? 'textMute' : 'onGold'} style={{ fontWeight: '900' }}>
           {index}
         </AText>
       </View>
-      <AText variant="h3" color={state === 'empty' ? 'textMute' : state === 'add' ? 'textDim' : 'text'} style={{ flex: 1 }}>
+      <AText variant={lg ? 'h1' : 'h3'} color={state === 'empty' ? 'textMute' : state === 'add' ? 'textDim' : 'text'} style={{ flex: 1 }}>
         {state === 'empty' ? '·  ·  ·' : state === 'add' ? '+ add missed dart' : label}
       </AText>
       {points !== undefined && state !== 'empty' && state !== 'add' ? (
-        <AText variant="h3" color={state === 'adjusted' ? 'cyan' : 'textDim'} style={{ fontVariant: ['tabular-nums'] }}>
+        <AText variant={lg ? 'h2' : 'h3'} color={state === 'adjusted' ? 'cyan' : 'textDim'} style={{ fontVariant: ['tabular-nums'] }}>
           {points}
         </AText>
       ) : null}
