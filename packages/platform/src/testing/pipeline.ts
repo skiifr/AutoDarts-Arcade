@@ -13,6 +13,7 @@ import {
   epochMsFromIso,
   isoFromEpochMs,
   seededRandom,
+  type AutodartsLocalOptions,
   type BoardModelOptions,
   type FaultPlan,
   type RandomSource,
@@ -86,6 +87,12 @@ export interface World {
   clock: () => string;
   /** Simulated ms of an ISO time from `clock`. */
   simMs(iso: string): number;
+  /**
+   * The oracle's record, not the app's: which board detection each adapter dart (throwId) was
+   * when an adapter first held it, read from the board's `_simDet` tags (`annotate`). A dart with
+   * coordinates is found by them; this places the darts reported without (`noCoordsRate`).
+   */
+  tags: Map<string, number>;
 }
 
 export function makeWorld(seed: string, options: { faults?: FaultPlan; board?: Partial<Omit<BoardModelOptions, 'random' | 'now'>> } = {}): World {
@@ -101,6 +108,41 @@ export function makeWorld(seed: string, options: { faults?: FaultPlan; board?: P
     contacts: new MemoryContactStore(),
     clock: () => isoFromEpochMs(EPOCH + sched.now()),
     simMs: (iso) => (epochMsFromIso(iso) ?? NaN) - EPOCH,
+    tags: new Map(),
+  };
+}
+
+const isNumber = (v: unknown): v is number => typeof v === 'number';
+
+/**
+ * Fills `world.tags` (an adapter's `observer`): after each snapshot, the adapter's known darts
+ * with coordinates are the detections that had them, and those without are the remaining listed
+ * detections, in board order, when their counts agree (as the adapter chaos suite's oracle).
+ */
+function tagger(world: World, adapter: () => AutodartsLocalAdapter): NonNullable<AutodartsLocalOptions['observer']> {
+  let listed: number[] = [];
+  return {
+    beforeApply: (snap) => {
+      const raw = snap.raw as { throws?: unknown };
+      listed = Array.isArray(raw.throws) ? raw.throws.slice(0, 3).map((t) => (t as { _simDet?: unknown } | null)?._simDet).filter(isNumber) : [];
+    },
+    afterApply: () => {
+      if (listed.length === 0) return;
+      const byCoords = new Map<string, number>();
+      for (const id of listed) for (const h of world.board.detections[id - 1]?.history ?? []) byCoords.set(`${h.coords.x}|${h.coords.y}`, id);
+      const claimed = new Set<number>();
+      const unplaced: string[] = [];
+      for (const k of adapter().visitState().known) {
+        const det = k.coords ? byCoords.get(`${k.coords.x}|${k.coords.y}`) : undefined;
+        if (det === undefined) unplaced.push(k.throwId);
+        else claimed.add(det);
+      }
+      const rest = listed.filter((id) => !claimed.has(id));
+      if (unplaced.length !== rest.length) return;
+      unplaced.forEach((throwId, i) => {
+        if (!world.tags.has(throwId)) world.tags.set(throwId, rest[i]!);
+      });
+    },
   };
 }
 
@@ -124,12 +166,13 @@ function describeProblem(p: RuntimeProblem): string {
 /** One launch of the app on the world. `n` keeps each launch's ids apart. */
 export function incarnate(world: World, n: number, options: { stateOnlySocket?: boolean; contacts?: ContactStore } = {}): Incarnation {
   const ids = createUlidSource({ now: () => EPOCH + world.sched.now(), random: seededRandom(`ids:${world.seed}:${n}`) });
-  const adapter = new AutodartsLocalAdapter({
+  const adapter: AutodartsLocalAdapter = new AutodartsLocalAdapter({
     transport: world.transport,
     scheduler: world.sched,
     clock: world.clock,
     ids,
     random: seededRandom(`jitter:${world.seed}:${n}`),
+    observer: tagger(world, () => adapter),
     ...(options.stateOnlySocket !== undefined ? { stateOnlySocket: options.stateOnlySocket } : {}),
   });
   const facts: BoardFactDraft[] = [];

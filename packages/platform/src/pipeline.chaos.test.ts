@@ -6,18 +6,21 @@ import { e2eRun, gameView, type E2EOptions, type E2EStats, type GameChoice } fro
  * The Phase 2 acceptance test, end to end: BoardModel (with faults: drops, duplicates, delays,
  * reorders, cuts, outages from a blink to several visits, takeouts and whole visits while
  * offline) → FakeBoardTransport → AutodartsLocalAdapter → createArcadeRuntime → SessionHost
- * playing a real game. Around it, the people (testing/e2e.ts): players taking turns, a referee
- * who confirms every review pause as it stands, and in some runs a player correcting recent
- * darts (VoidDart, CorrectDart, AddDart). The storage refuses appends in some runs, and the app
- * crashes at any moment in others (mid-visit, mid-takeout, after long idle stretches) and is
- * launched again after 0–10 s.
+ * playing a real game. The board has its odd ways too (E2E_BOARD): darts pulled one at a time,
+ * takeouts called off (then, sometimes, a dart withdrawn), one-dart visits of 3 s, and in some
+ * faulty runs darts without coordinates. Around it, the people (testing/e2e.ts): players taking
+ * turns, a referee who confirms every review pause as it stands, and in some runs a player
+ * correcting recent darts (VoidDart, CorrectDart, AddDart). The storage refuses appends in some
+ * runs, and the app crashes at any moment in others (mid-visit, mid-takeout, after long idle
+ * stretches) and is launched again after 0–10 s.
  *
  * For each run (`judge`): every turn scores exactly the darts the board listed for its visit, as
- * the person corrected them, of the player who threw that visit, or is flagged needsReview;
- * a turn never runs on into the next visit; every board visit with darts reaches a turn or is
- * covered by a flagged turn; every inferred takeout ends its turn flagged and pauses for review
- * before the next turn; nothing invented or counted twice; the log is gap-free and
- * schema-valid; a session cannot complete with anything unreviewed. Zero silent mismatches.
+ * the person corrected them, of the player who threw that visit, or is flagged needsReview; in an
+ * unflagged turn each physical dart keeps one throw id; a turn never runs on into the next
+ * visit; every board visit with darts reaches a turn or is covered by a flagged turn; every
+ * inferred takeout ends its turn flagged and pauses for review before the next turn; nothing
+ * invented or counted twice; the log is gap-free and schema-valid; a session cannot complete
+ * with anything unreviewed. Zero silent mismatches.
  *
  * Every run is on virtual time: about 14 ms each on this machine.
  */
@@ -44,6 +47,9 @@ const zero = (): E2EStats => ({
   refusedAppends: 0,
   sourceRebuilds: 0,
   crashes: 0,
+  pulledDarts: 0,
+  calledOffTakeouts: 0,
+  noCoordsDetections: 0,
 });
 
 async function sweep(from: number, runs: number, options: E2EOptions): Promise<{ failures: string[]; total: E2EStats; crashed: number }> {
@@ -74,8 +80,15 @@ describe('end-to-end chaos: board → adapter → runtime → host → game', ()
     expect(total.refusedAppends).toBeGreaterThan(1500);
     expect(total.sourceRebuilds).toBeGreaterThan(300);
     expect(total.crashes).toBeGreaterThan(200);
-    // Uncertain turns are flagged, but most turns still score as they are.
-    expect(total.flaggedTurns / total.turns).toBeLessThan(0.5);
+    // …and the board's odd ways.
+    expect(total.pulledDarts).toBeGreaterThan(4500);
+    expect(total.calledOffTakeouts).toBeGreaterThan(500);
+    expect(total.noCoordsDetections).toBeGreaterThan(1000);
+    // Uncertain turns are flagged, but not every turn. In this mix about half are (0.52): most
+    // networks are faulty, a third of the visits have an outage, and each inferred takeout flags
+    // two turns, its own and the one its review pause hands over to (who is up is a guess).
+    // A clean network flags only visits the board withdrew (below).
+    expect(total.flaggedTurns / total.turns).toBeLessThan(0.55);
   }, 120_000);
 
   it.each(['siege', 'cricket', 'around-the-clock'] as GameChoice[])('the other games too: 40 runs of %s', async (game) => {
@@ -89,6 +102,10 @@ describe('end-to-end chaos: board → adapter → runtime → host → game', ()
     // The only flag a clean network allows: the board withdrew every dart of a visit.
     expect(total.flaggedTurns - total.withdrawnVisits + total.reviewPauses + total.inferredTakeouts + total.recoveredDarts).toBe(0);
     expect(total.turns).toBeGreaterThan(1500);
+    // Pulls one at a time, called-off takeouts and 3 s visits are part of a clean session too.
+    expect(total.pulledDarts).toBeGreaterThan(500);
+    expect(total.calledOffTakeouts).toBeGreaterThan(100);
+    expect(total.noCoordsDetections).toBe(0);
   }, 60_000);
 
   it('a failing store: 150 faulty runs whose store refuses appends at random, every dart present or recovered and flagged', async () => {

@@ -63,8 +63,8 @@ export interface E2EStats {
   /** Turns flagged because the board withdrew every dart of their visit. */
   withdrawnVisits: number;
   /**
-   * Board visits that ended with no dart listed and whose end the app could not see (it saw
-   * none of their darts, or the adapter never reported the end): an adapter gap, left out.
+   * Board visits the app saw none of that ended with no dart listed (every dart withdrawn, or a
+   * reset): a board limit, left out of the rotation (`judge`).
    */
   unseenVisits: number;
   finished: number;
@@ -74,6 +74,13 @@ export interface E2EStats {
   refusedAppends: number;
   sourceRebuilds: number;
   crashes: number;
+  /**
+   * The board's odd ways (E2E_BOARD): darts pulled one at a time, takeouts called off, darts
+   * reported without coordinates.
+   */
+  pulledDarts: number;
+  calledOffTakeouts: number;
+  noCoordsDetections: number;
 }
 
 export interface Features {
@@ -102,6 +109,28 @@ export interface E2ERun {
   violations: string[];
   stats: E2EStats;
 }
+
+/**
+ * How often the runs use the board's odd ways, as the adapter chaos suite does (CHAOS_BOARD
+ * there), drawn from a stream of their own so the network, dart and people draws of each seed
+ * stay as they were.
+ */
+export const E2E_BOARD = {
+  /** Faulty runs (never clean ones) where the board reports some darts without coordinates… */
+  noCoordsRuns: 0.3,
+  /** …and the fraction of such darts in them. */
+  noCoordsRate: 0.25,
+  /** Takeouts whose darts come out one at a time, as on a real board. */
+  pullOneByOne: 0.5,
+  /** Of those, the ones where the last dart too comes out before "Takeout finished". */
+  pullLastToo: 0.3,
+  /** Visits where a takeout starts and is called off with the darts still in. */
+  callOff: 0.1,
+  /** Of those, the ones where the board then withdraws one of the darts. */
+  withdrawAfterCallOff: 0.4,
+  /** Visits of one dart, taken out as soon as a visit can be (SIM_MIN_VISIT_MS). */
+  quickVisit: 0.15,
+};
 
 function faultPlan(r: () => number): FaultPlan {
   const plan: FaultPlan = {};
@@ -150,10 +179,9 @@ function chooseFeatures(seed: number, o: E2EOptions): Features {
  * on from there. (An outage that hid a whole visit leaves the app a seat off; the review pause
  * is where the people learn of it.)
  *
- * A visit the app could see nothing of (the board withdrew every dart, or was reset, before any
- * reading reached the app) is no visit to it: its takeout looks like a hand in front of the
- * cameras, and the darts that follow continue the turn. `throwers` leaves such visits out of
- * the rotation, as the app must. Ground truth for `judge`.
+ * A visit the app saw none of, whose darts the board withdrew or reset before any reading
+ * reached the app, may be no visit to it: the board's own record of it is empty. `throwers`
+ * leaves such visits out of the rotation (`judge` says which). Ground truth for `judge`.
  */
 export class People {
   private readonly visits: { visit: number; startedAt: number; out: PlayerId[] }[] = [];
@@ -318,11 +346,14 @@ export class UserBot {
 
 export async function e2eRun(seed: number, options: E2EOptions = {}): Promise<E2ERun> {
   const r = seededRandom(`e2e:${seed}`);
+  const x = seededRandom(`e2e-board:${seed}`);
+  const xBetween = (lo: number, hi: number): number => lo + x() * (hi - lo);
   const features = chooseFeatures(seed, options);
   const plan: FaultPlan = options.clean ? {} : faultPlan(r);
+  const noCoordsRate = !options.clean && x() < E2E_BOARD.noCoordsRuns ? E2E_BOARD.noCoordsRate : 0;
   const world = makeWorld(`e2e:${seed}`, {
     faults: plan,
-    board: { noiseFrames: r() < 0.3, missStyle: r() < 0.5 ? 'outside' : 'bare', emptyThrows: r() < 0.8 ? 'omit' : 'array' },
+    board: { noiseFrames: r() < 0.3, missStyle: r() < 0.5 ? 'outside' : 'bare', emptyThrows: r() < 0.8 ? 'omit' : 'array', annotate: true, noCoordsRate },
   });
   const launch = { stateOnlySocket: r() < 0.3, contacts: world.contacts };
   const { sched, board, transport } = world;
@@ -439,11 +470,14 @@ export async function e2eRun(seed: number, options: E2EOptions = {}): Promise<E2
       outageTimers.push(sched.setTimeout(() => (world.store.failRate = rate), at + dur));
     }
 
-    const darts = r() < 0.15 ? 1 + Math.floor(r() * 2) : 3;
+    const quick = x() < E2E_BOARD.quickVisit;
+    const drawn = r() < 0.15 ? 1 + Math.floor(r() * 2) : 3;
+    const darts = quick ? 1 : drawn;
     let firstThrowAt = -1;
     let detected = 0;
     for (let d = 0; d < darts; d++) {
-      await sched.advance(between(250, 2500));
+      const wait = between(250, 2500);
+      await sched.advance(quick ? Math.min(wait, 400) : wait);
       if (firstThrowAt < 0) {
         firstThrowAt = sched.now();
         people.startVisit(board.currentVisit.index, firstThrowAt, screen());
@@ -466,20 +500,45 @@ export async function e2eRun(seed: number, options: E2EOptions = {}): Promise<E2
         board.withdraw(r() < 0.7 ? undefined : Math.floor(r() * Math.max(1, board.dartsOnBoard)));
       }
     }
-    await sched.advance(between(400, 3000));
+    const settle = between(400, 3000);
+    await sched.advance(quick ? Math.min(settle, 500) : settle);
+    if (board.dartsOnBoard > 0 && x() < E2E_BOARD.callOff) {
+      // A hand in front of the cameras starts a takeout and leaves the darts in.
+      board.startTakeout();
+      await sched.advance(xBetween(300, 1500));
+      board.callOffTakeout();
+      await sched.advance(xBetween(200, 800));
+      if (board.dartsOnBoard > 0 && x() < E2E_BOARD.withdrawAfterCallOff) {
+        board.withdraw(Math.floor(x() * board.dartsOnBoard));
+        await sched.advance(xBetween(200, 800));
+      }
+    }
     // A clean run is a clean session: the board never needs a reset (a reset flags its turn).
     const end = options.clean ? 1 : r();
+    const untilMin = (): number => Math.max(0, firstThrowAt + SIM_MIN_VISIT_MS - sched.now());
     if (end < 0.05) {
       board.manualReset();
     } else if (end < 0.08) {
-      await sched.advance(Math.max(0, firstThrowAt + SIM_MIN_VISIT_MS - sched.now()));
+      await sched.advance(untilMin());
       board.stickTakeout();
       await sched.advance(between(8500, 12000));
       board.manualReset();
     } else {
       board.startTakeout();
       const pulling = between(300, 2500);
-      await sched.advance(Math.max(pulling, firstThrowAt + SIM_MIN_VISIT_MS - sched.now()));
+      if (board.dartsOnBoard > 1 && x() < E2E_BOARD.pullOneByOne) {
+        // Darts come out one at a time; the visit lasts until the last one is out.
+        const n = board.dartsOnBoard;
+        const pulls = x() < E2E_BOARD.pullLastToo ? n : n - 1;
+        for (let p = 0; p < pulls; p++) {
+          const gap = xBetween(150, 700);
+          await sched.advance(p === n - 1 ? Math.max(gap, untilMin()) : gap);
+          board.pullDart(Math.floor(x() * board.dartsOnBoard));
+        }
+        await sched.advance(Math.max(xBetween(150, 600), untilMin()));
+      } else {
+        await sched.advance(quick ? untilMin() : Math.max(pulling, untilMin()));
+      }
       board.finishTakeout();
       await quiet();
     }
@@ -584,12 +643,16 @@ export function judge(
   if (JSON.stringify(log) !== JSON.stringify(hostLog)) v.push('stored log differs from the host’s');
   if (state.lastSeq !== log.length) v.push(`state at seq ${state.lastSeq}, log has ${log.length}`);
 
-  // Board darts → detections, by coordinates (unique per reading in the board model), and which
-  // detection a throw id stood for when a person acted on it.
+  // Board darts → detections: by coordinates (unique per reading in the board model), or, for a
+  // dart the board reported without them, by the board's tag when the adapter first held it
+  // (`world.tags`); and which detection a throw id stood for when a person acted on it.
   const detByCoords = new Map<string, number>();
   for (const d of board.detections) for (const h of d.history) detByCoords.set(coordKey(h.coords), d.id);
   const detById = new Map(board.detections.map((d) => [d.id, d]));
+  const detOfDetected = (p: EventOf<'DartDetected'>['payload']): number | undefined => (p.coords ? detByCoords.get(coordKey(p.coords)) : world.tags.get(p.throwId));
   const detOfThrow = new Map<string, number | undefined>();
+  /** Throw ids an update moved to another detection: a physical dart that changed identity. */
+  const moved = new Set<string>();
   const userCommands = new Map((ctx.bot?.commands ?? []).filter((c) => c.status === 'applied').map((c) => [c.commandId, c]));
   const detAtCommand = new Map<string, number | undefined>();
   let recoveredDarts = 0;
@@ -599,13 +662,16 @@ export function judge(
       detAtCommand.set(e.causationId, c.type === 'AddDart' || c.throwId === undefined ? undefined : detOfThrow.get(c.throwId));
     }
     if (e.type === 'DartDetected') {
-      const id = e.payload.coords ? detByCoords.get(coordKey(e.payload.coords)) : undefined;
+      const id = detOfDetected(e.payload);
       if (id === undefined) v.push(`invented dart ${e.payload.segment.label} (seq ${e.seq})`);
       if (!detOfThrow.has(e.payload.throwId)) detOfThrow.set(e.payload.throwId, id);
     } else if (e.type === 'DartUpdated' && e.payload.coords) {
-      // Positions are the adapter's identity: an update may move a throw id to another dart.
+      // A re-read keeps its dart (identity by coordinates, §6.1). Should an update move a throw id
+      // to another dart, the oracle follows it, and the turn that holds it must be flagged.
       const id = detByCoords.get(coordKey(e.payload.coords));
       if (id === undefined) v.push(`update to invented coordinates (seq ${e.seq})`);
+      const was = detOfThrow.get(e.payload.throwId);
+      if (was !== undefined && id !== undefined && was !== id) moved.add(e.payload.throwId);
       detOfThrow.set(e.payload.throwId, id);
     } else if (e.type === 'DartThrown' && e.payload.origin === 'recovered') recoveredDarts++;
   }
@@ -651,30 +717,25 @@ export function judge(
     }
   }
 
-  // A visit that ended with no dart listed (the board withdrew them all, or was reset), and
-  // whose end the app could not see: it saw none of its darts (a short outage hid them and the
-  // reset), or the adapter never reported the visit's end (a reset after every dart was
-  // withdrawn, a takeout during an outage then), so the next visit's darts came under the same
-  // visit key. To the app the visit never ended: its turn runs on into the next visit. That is
-  // the adapter's to catch (visit tracker, §6.4); here such a visit is left out of the
-  // rotation, as the app must leave it out, and counted.
-  const keysOf = new Map<number, Set<string>>();
+  // A board visit the app saw none of, which ended with no dart listed: the board withdrew every
+  // dart, or was reset, before any reading reached the app. The board's own record of the visit
+  // is then empty, so inside an outage too short for a whole visit nothing the app can read says
+  // it happened: its takeout looks like a hand in front of the cameras, and a reset may leave the
+  // board just as it showed before (§6.3, §6.4). Such a visit is left out of the rotation, as the
+  // app must leave it out. (When the app does infer a takeout across it, the review pause hands
+  // the rotation to the app anyway.) A visit whose darts the app saw always counts: if the app
+  // missed its end, that is the visit tracker's to catch, and the oracle holds it to that.
+  const seenVisits = new Set<number>();
   for (const e of log) {
-    if (e.type !== 'DartDetected' || !e.payload.coords) continue;
-    const det = detByCoords.get(coordKey(e.payload.coords));
-    if (det === undefined) continue;
-    const visit = detById.get(det)!.visit;
-    keysOf.set(visit, (keysOf.get(visit) ?? new Set()).add(e.payload.visitKey));
+    if (e.type !== 'DartDetected') continue;
+    const det = detOfDetected(e.payload);
+    if (det !== undefined) seenVisits.add(detById.get(det)!.visit);
   }
-  const endedKeys = new Set<string>();
-  for (const e of log) if (e.type === 'TakeoutFinished' || e.type === 'VisitReset') endedKeys.add(e.payload.visitKey);
-  const unseen = new Set<number>();
-  for (const bv of board.visits) {
-    if (bv.everDetections.length === 0 || bv.endedBy === undefined || (bv.endedBy === 'takeout' && bv.finalDetections.length > 0)) continue;
-    const keys = [...(keysOf.get(bv.index) ?? [])];
-    const merged = board.visits.some((later) => later.index > bv.index && [...(keysOf.get(later.index) ?? [])].some((k) => keys.includes(k)));
-    if (keys.length === 0 || merged || !keys.some((k) => endedKeys.has(k))) unseen.add(bv.index);
-  }
+  const unseen = new Set(
+    board.visits
+      .filter((bv) => bv.everDetections.length > 0 && (bv.endedBy === 'reset' || (bv.endedBy === 'takeout' && bv.finalDetections.length === 0)) && !seenVisits.has(bv.index))
+      .map((bv) => bv.index),
+  );
   // The player of the turn the app put each board visit's darts in (live or voided).
   const gaveTo = new Map<number, PlayerId>();
   for (const t of state.turns) {
@@ -699,6 +760,8 @@ export function judge(
   for (const t of state.turns) {
     if (t.needsReview) continue;
     const label = `turn ${t.turnIndex} (${t.ended ? t.endReason : 'open'})`;
+    const shifted = [...t.darts, ...t.voidedDarts].filter((d) => moved.has(d.throwId));
+    if (shifted.length > 0) v.push(`silent identity breach, ${label}: an update moved ${shifted.map((d) => d.segment.label).join(' ')} to another dart`);
     const live = t.darts.filter((d) => !d.padded);
     const darts = live.filter((d) => isBoardOrigin(d.origin));
     const added = live.filter((d) => !isBoardOrigin(d.origin));
@@ -713,8 +776,6 @@ export function judge(
     if (dets.some((d) => d === undefined)) continue; // reported as invented above
     const voided = t.voidedDarts.filter((d) => isBoardOrigin(d.origin)).map((d) => detOfThrow.get(d.throwId));
     const visits = new Set([...dets, ...voided].filter((d) => d !== undefined).map((d) => detById.get(d)!.visit));
-    for (const bv of unseen) if (visits.size > 1) visits.delete(bv);
-    if (visits.size === 1 && unseen.has([...visits][0]!)) continue; // the darts of a visit whose end the app could not see
     if (visits.size === 0) {
       if (t.ended) v.push(`${label}: ended with no board darts, unflagged`);
       continue;
@@ -827,6 +888,9 @@ export function judge(
       refusedAppends: 0,
       sourceRebuilds: 0,
       crashes: 0,
+      pulledDarts: board.detections.filter((d) => d.pulled).length,
+      calledOffTakeouts: board.calledOffTakeouts,
+      noCoordsDetections: board.detections.filter((d) => d.noCoords).length,
     },
   };
 }
