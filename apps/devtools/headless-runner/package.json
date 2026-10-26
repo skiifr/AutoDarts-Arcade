@@ -1,0 +1,17 @@
+{
+  "name": "@arcade/headless-runner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plays any game module headless, from a script or at random with a seed, and prints the turn log and standings.",
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/main.mjs"
+  },
+  "dependencies": {
+    "@arcade/event-schema": "*",
+    "@arcade/games": "*"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}
