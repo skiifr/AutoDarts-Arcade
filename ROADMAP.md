@@ -31,6 +31,7 @@
 | **Q6** | Upgrade the detection host if the Pi 4 proves unreliable? | **Only after Phase 5, and only if proven.** P1–P5 must work on the current Pi 4. Evidence is collected throughout, and the **H1 hardware review** after P5 decides (see below) |
 | **R** | How is uncertain history reconciled after a reconnect? | **Flag it, and pause when a takeout may have been missed.** Same-visit recovered darts are scored and the turn is flagged `needsReview`. An inferred takeout ends the turn `needsReview` with no padded misses, and the next turn waits until a person confirms (`ConfirmTurn`). A session can't close as completed while a flagged turn is unconfirmed (ARCHITECTURE §6.4) |
 | **S** | May the app ever write to the board (for example, reset a stuck takeout)? | **No.** The transport allows only GET `/api/state`, `/api/version`, `/api/state/stats`, `/api/cams/stats` and `WS /api/events`. A stuck takeout is reset from Autodarts' own app, and Arcade offers manual entry meanwhile (ARCHITECTURE §4.3, §6.3, §9.5) |
+| **V** | Which visual direction? | **SMARTS-style:** tall illustrated game posters, an *Up now* / *Up next* player layout, and a themed stage for each game, as in the [mockups](https://github.com/skiifr/AutoDarts-Arcade/blob/research/ui-smarts-mockups/docs/research/ui-smarts-mockups/README.md) (`docs/research/ui-smarts-mockups/README.md` on branch `research/ui-smarts-mockups`). **Original art only:** the composition is the reference, never a copy of 501 Entertainment's art, names or screens (R23). Concrete screens and art are approved at the Phase 4 entry gate |
 
 ---
 
@@ -46,6 +47,7 @@ flowchart LR
   HC1 -->|"on-device acceptance"| P4["P4 Arcade shell UI"]
   P2 --> P4
   P3 --> P4
+  V["Visual direction approved (V)"] -->|"style guide & representative art"| P4
   P4 --> P5["P5 Arcade games, effects & art"]
   P5 --> P6["P6 Companion & home-release hardening"]
   P5 -.->|"H1: hardware review"| HW["Optional detection-host upgrade"]
@@ -61,7 +63,7 @@ flowchart LR
 | HC1 | P1 (app and native builds) + access to the board and the Pi | P2's live adapter, P4's on-device acceptance | **G1** go/no-go on the local throw stream |
 | P2 | P1 (schema); HC1 (G1 = go) for the live adapter | P4 | Chaos suite green; live adapter proven on HC1 fixtures |
 | P3 | P1 (schema) | P4 | Replay-equivalence suite green |
-| P4 | P2, P3; HC1 for on-device acceptance | P5 | Full game playable on every device class |
+| P4 | P2, P3; **visual direction approved (V)**; HC1 for on-device acceptance | P5 | Full game playable on every device class |
 | P5 | P4 | P6, H1 | Performance budgets met on the weakest target |
 | H1 | P5 + health data from P2–P5 | optional hardware upgrade | Written upgrade / no-upgrade decision |
 | P6 | P5 | home release | Soak test, installed on all your devices |
@@ -77,7 +79,8 @@ Phase 1 used to include the hardware work as well. The owner can't reach the boa
 **Status (2026-10-26):**
 - **Done:** items 4–6 and 8. That covers the monorepo with CI, `event-schema` v1 with tests, the app skeleton on Expo SDK 56 + `react-native-tvos` ([ADR-003](docs/adr/0003-client-stack-versions.md)), and `CONTRIBUTING.md`.
 - **Done early:** the app skeleton also carries the **visual shell** for all of W0–W5, driven by demo darts and checked in the web preview. This pulls P4's layout work forward; P4 still owns wiring the shell to the engine, profiles and the acceptance criteria.
-- **Added, not yet proven:** item 9, native build CI. It only counts as done once the workflow is green on GitHub.
+- **Done:** item 9, native build CI. The workflow is green on GitHub for Android phone, Android TV and the iOS simulator.
+- **Open:** CI green on `main`. Nothing is merged to `main` yet; CI is green on the working branches.
 - **Moved:** the live "dart ticker" moves to Phase 2, because it needs the live adapter.
 
 **Scope**
@@ -93,7 +96,7 @@ Phase 1 used to include the hardware work as well. The owner can't reach the boa
 - [x] The Expo SDK / `react-native-tvos` version is chosen and recorded as an ADR ([ADR-003](docs/adr/0003-client-stack-versions.md)).
 - [x] `CONTRIBUTING.md` states the code-reuse rule.
 - [ ] CI is green on `main`.
-- [ ] The native build workflow is green on GitHub for Android phone, Android TV and iOS.
+- [x] The native build workflow is green on GitHub for Android phone, Android TV and iOS.
 
 **Tests:** schema unit tests; CI smoke builds for each target (web export and native builds).
 
@@ -157,6 +160,15 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
 
 **HC1 dependency:** everything here is built and tested against the simulator, the fault proxy and scripted fixtures first. The `autodarts-local` adapter is only called done once HC1 has passed (G1 = go) and the recorded fixtures replay cleanly.
 
+**Status (2026-10-26):** built, and proven in simulation (**sim**: the simulator, the fake board and virtual time, not hardware).
+- **Proven in simulation:**
+  - the end-to-end chaos suite: 1,000 seeded Countdown runs with faults through adapter, runtime and host, plus 40 runs each of the other games, with zero silent mismatches and a review pause after every inferred takeout; 200 clean-network runs flag nothing;
+  - resync within 2 s of the board becoming reachable, on the virtual scheduler (worst case 0.81 s when attempts fail fast, 1.59 s when they hang);
+  - idle load, and the build-failing allowlist test;
+  - crash-resume to the exact state: 200 runs dropped at a random quiet moment and resumed from the store.
+- **Done:** the dart ticker, against the fake board in a browser.
+- **Open until HC1:** golden replay of real captures, the ticker on devices, the resume time on the Fire TV, and the on-device reconnect tests.
+
 **Scope**
 - **Dart ticker** (moved from P1): a raw view in the app that shows live darts from the board. It is the first end-to-end check of the live adapter.
 - `packages/adapters`:
@@ -174,14 +186,15 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
 **Acceptance criteria**
 - [ ] **Golden replay:** each HC1 fixture produces a byte-identical normalized log, committed as a golden file.
 - [ ] After HC1: the dart ticker shows live darts on **iPhone, iPad and the Fire TV Stick 4K Max** (plus an Android phone or emulator).
-- [ ] **Chaos suite:** 1,000 seeded runs with random disconnects, duplicate frames, missed frames and reconnects at every point in a visit.
+- [x] **Chaos suite:** 1,000 seeded runs with random disconnects, duplicate frames, missed frames and reconnects at every point in a visit. **sim**
   - Final dart set equals the ground truth, **or** the affected turn is flagged `needsReview`.
   - Whenever a takeout was inferred, the game paused for review before the next turn (owner decision R).
   - **Zero** silent mismatches.
-- [ ] Resync completes ≤ 2 s after the board becomes reachable, measured with the fault proxy.
-- [ ] Killing the app mid-turn and relaunching restores the exact state. Resume ≤ 3 s on a Fire OS stick.
-- [ ] Allowlist test: any request outside the allowed endpoints, or with any method other than GET, fails the build.
-- [ ] Idle load on the board ≤ 1 HTTP request per 5 s.
+- [ ] Resync completes ≤ 2 s after the board becomes reachable, measured with the fault proxy. **sim** on the virtual scheduler so far (0.81 s and 1.59 s worst case); not yet measured with the fault proxy.
+- [x] Killing the app mid-turn and relaunching restores the exact state. **sim**
+- [ ] Resume ≤ 3 s on a Fire OS stick.
+- [x] Allowlist test: any request outside the allowed endpoints, or with any method other than GET, fails the build.
+- [x] Idle load on the board ≤ 1 HTTP request per 5 s. **sim**
 
 **Tests:**
 - Unit tests for the diff and normalization tables, including both miss shapes, both bull shapes and the missing `throws` key.
@@ -195,6 +208,10 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
 
 **Goal:** a pure, deterministic engine with a plugin game API, proven on well-known rules before inventing new ones.
 
+**Status (2026-10-26):** built. The engine, Countdown, Cricket, Around the Clock, Siege (rules only), the headless runner and the authoring guide are in.
+- **Met:** 100 % branch coverage of every `module.ts`, gated in CI (`yarn coverage`); replay equivalence; determinism on Node.
+- **Open:** determinism on device, the refold time on the Fire TV (the benchmark so far runs in Node), and the sample "new game" check.
+
 **Scope**
 - `packages/engine`: fold/replay, turn policy (including the review pause and `ConfirmTurn`, ARCHITECTURE §6.4), commands, provisional finish, effect emission for new events only, and an optional snapshot cache.
 - `packages/games`:
@@ -206,9 +223,10 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
 - A game-authoring guide (`packages/games/README.md`).
 
 **Acceptance criteria**
-- [ ] Each game has a rules test suite derived from its `rules.md`, with 100 % branch coverage of `module.ts`.
-- [ ] **Replay equivalence** (property test): for any generated session and any dart *k*, throwing a wrong value and then correcting it to *v* ends in the same state as throwing *v* in the first place. The same holds for void and add.
-- [ ] **Determinism:** the same log and seed produce identical state, on Node and on device.
+- [x] Each game has a rules test suite derived from its `rules.md`, with 100 % branch coverage of `module.ts`.
+- [x] **Replay equivalence** (property test): for any generated session and any dart *k*, throwing a wrong value and then correcting it to *v* ends in the same state as throwing *v* in the first place. The same holds for void and add.
+- [x] **Determinism:** the same log and seed produce identical state on Node.
+- [ ] **Determinism** on device.
 - [ ] Refolding a 1,000-dart log takes ≤ 5 ms on a Fire OS stick (release build). If not, the snapshot cache is enabled and re-measured.
 - [ ] A new trivial game can be added with one folder and one registry line (checked by a sample PR).
 
@@ -219,6 +237,12 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
 ## Phase 4: Arcade shell UI
 
 **Goal:** the full player journey from W0 to W5, on every device class, with both touch and D-pad.
+
+**Entry condition: visual direction approved** (owner decision V). Before P4 builds the screens:
+- the **style guide** is written and approved;
+- **representative art** is approved: the W1 game posters, and at least one themed W3 stage with *Up now* / *Up next*.
+
+Both moved forward from Phase 5, so the shell is built on an approved look rather than a placeholder one. The redesign is in progress.
 
 **Scope**
 - Screens W0–W5 (ARCHITECTURE §10). `ui-kit` includes:
@@ -269,9 +293,9 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
   - quality-tier auto-selection.
 - Games: **Siege**, **Territory**, **Balloon Pop** (all original), with stage renderers and their own rules tests.
 - **Original asset pipeline:**
-  - style guide;
+  - the style guide and the representative art move to the Phase 4 entry gate (owner decision V); Phase 5 makes the rest of the art to that guide;
   - an `ASSETS.md` provenance log (author, tool, licence for every file);
-  - an originality check against BattleUp's public catalogue;
+  - an originality check against BattleUp's public catalogue and 501 Entertainment's SMARTS games (decision V);
   - sound design with a licence on file.
 
 **Acceptance criteria**
