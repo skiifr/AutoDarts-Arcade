@@ -1,6 +1,6 @@
 # AutoDarts Arcade — Roadmap
 
-> **Companion documents:** [ARCHITECTURE.md](ARCHITECTURE.md) (design and evidence) · [RISK-REGISTER.md](RISK-REGISTER.md) (risks R01–R26).
+> **Companion documents:** [ARCHITECTURE.md](ARCHITECTURE.md) (design and evidence) · [RISK-REGISTER.md](RISK-REGISTER.md) (risks R01–R27).
 > Phase 0 is complete when these three documents are accepted. Phases 1–6 below are the implementation roadmap. **No code or deployment happens until Phase 1 is approved.**
 
 ---
@@ -19,16 +19,16 @@
 | Wireframes W0–W5 | ARCHITECTURE §10 |
 | Technical risk register | RISK-REGISTER.md |
 
-### Owner decisions needed before Phase 1 starts
+### Owner decisions (answered 2026-10-26)
 
-| # | Question | Why it matters | Default if unanswered |
-|---|---|---|---|
-| **Q1** | **Which Fire TV Stick model(s) do you own or target?** | Fire OS sticks run the shared Android build. **Vega** sticks (4K Select 2025, HD 2026, 4K 3rd gen 2026) need a separate app track (R04) | Fire OS first; Vega spike in P1, build in P6 |
-| **Q2** | Private use only (TestFlight / sideload), or public store listing? | A public listing needs Q3, Q4 and Q5 solved first (R03, R07, R08) | Private |
-| **Q3** | Any commercial or venue use (BattleUp-style)? | Autodarts ToS §3.2/§6.1 require written permission (R03) | Non-commercial |
-| **Q4** | Add a **GPLv3 §7 app-store exception** now, while you are the sole copyright holder? Or relicense? | It is cheap today and very hard after outside contributions (R07) | Add the exception in P1 |
-| **Q5** | Product name for the shipped app | "AutoDarts" in an app name breaks store rules (R08) | Placeholder codename |
-| **Q6** | Is upgrading the detection host (Pi 5 / mini PC) acceptable if the Pi 4 proves unreliable? | It is the only real fix for R11, and it needs no app change | Stay on Pi 4; measure in P1 |
+| # | Question | Answer → consequence |
+|---|---|---|
+| **Q1** | Which Fire TV Stick? | **Fire TV Stick 4K Max.** Both generations run **Fire OS** (1st gen 2021: Fire OS 7; 2nd gen 2023: Fire OS 8; 2 GB RAM each) ✅[P1]. The stick runs the **same Android build** as phones. The Vega track drops to an optional backlog item (R04, R05) |
+| **Q2** | Private use or public store listing? | **Private home use.** Distribution is direct install: an APK sideloaded onto the 4K Max and Android devices ✅[P26], and iOS internal distribution (P1 picks TestFlight-internal vs ad hoc) (R27). No store listings |
+| **Q3** | Commercial or venue use? | **No.** Owner reports that Autodarts staff permitted private home use via their Discord. *Owner-attested; not independently verified.* Keep a screenshot or link of that permission (R03) |
+| **Q4** | GPL app-store exception? | **Not needed for private use.** You are the sole copyright holder, so the GPL doesn't restrict your own installs. Revisit only before accepting outside contributions or publishing (R07) |
+| **Q5** | Product name | **Keep "AutoDarts Arcade"** for home use. Revisit only if it's ever published (R08) |
+| **Q6** | Upgrade the detection host if the Pi 4 proves unreliable? | *Open.* Default: stay on the Pi 4 and measure in P1 |
 
 ---
 
@@ -42,21 +42,20 @@ flowchart LR
   P2 --> P4["P4 Arcade shell UI"]
   P3 --> P4
   P4 --> P5["P5 Arcade games, effects & art"]
-  P5 --> P6["P6 Vega, companion & release hardening"]
-  P1 -.->|"G2: Vega spike result"| P6
+  P5 --> P6["P6 Companion & home-release hardening"]
 ```
 
 - **P2 and P3 run in parallel** once the event schema (P1) is frozen. P3 develops against the simulator adapter and recorded fixtures, so it doesn't need P2's live adapter.
-- **Vega track:** if Q1 says your main stick is Vega, the Vega shell moves from P6 into P4. P4's TV acceptance criteria then apply to Vega too.
+- **Vega:** not on the critical path, because your 4K Max runs Fire OS. It becomes relevant only if the stick is replaced, since newer sticks run Vega. See the *Backlog* at the end of this file.
 
 | Phase | Depends on | Unblocks | Gate to exit |
 |---|---|---|---|
-| P1 | P0 accepted, Q1–Q6 answered or defaulted | P2, P3 | **G1** go/no-go on the local throw stream; **G2** Vega feasibility |
+| P1 | P0 accepted (Q1–Q5 answered, Q6 defaulted) | P2, P3 | **G1** go/no-go on the local throw stream |
 | P2 | P1 (G1 = go) | P4 | Chaos suite green |
 | P3 | P1 (schema) | P4 | Replay-equivalence suite green |
 | P4 | P2, P3 | P5 | Full game playable on every device class |
 | P5 | P4 | P6 | Performance budgets met on the weakest target |
-| P6 | P5 (+ G2) | release | Soak test, store / private-distribution readiness |
+| P6 | P5 | home release | Soak test, installed on all your devices |
 
 ---
 
@@ -83,27 +82,30 @@ flowchart LR
 4. **Monorepo:** Yarn workspaces, TS strict, ESLint dependency rules (§5.3), Vitest, and CI (lint, typecheck, unit tests).
 5. **`packages/event-schema` v1:** zod types, JSON Schema generation, validation of all fixtures through a *throwaway* normalizer.
 6. **App skeleton** (`apps/arcade`, Expo + `react-native-tvos`):
-   - builds for iPhone, iPad, Android phone and Fire OS (TV profile);
+   - builds for iPhone, iPad, Android and the **Fire TV Stick 4K Max** (TV profile);
    - W0 connect screen;
    - a raw "dart ticker" that shows live darts from the board.
-7. **Vega spike** (time-boxed, 3 days): a React Native for Vega hello-app that opens `ws://<board-ip>:3180/api/events` and renders a Reanimated + Lottie scene on a Vega stick or the Vega Virtual Device.
-8. **Licence and name housekeeping** per Q4 and Q5. Add a `CONTRIBUTING.md` with the code-reuse rule (ARCHITECTURE §4.5).
+7. **Private-install dry run.**
+   - *Fire TV:* enable Developer Options → ADB debugging and Apps from Unknown Sources on the 4K Max ✅[P26], then install the APK over the network with `adb`.
+   - *iPhone / iPad:* choose between TestFlight internal testing (builds expire after 90 days 🟡[P27]) and ad hoc "internal distribution" (device-registered, longer-lived profile ⚪). Both need a paid Apple Developer Program membership ⚪. A free Apple ID re-signs every 7 days 🟡, which is impractical.
+   - Write the chosen steps into `docs/install.md`.
+8. **Repo housekeeping:** add a `CONTRIBUTING.md` with the code-reuse rule (ARCHITECTURE §4.5), so the private-use licence position stays clean.
 
 **Acceptance criteria**
 - [ ] **G1:** a written verdict on whether *your* board's version streams throws on `/api/events`, with the fixture that proves it. **No-go** triggers the contingency below.
 - [ ] Every 🟡/🔬 row in ARCHITECTURE §11 is updated to ✅ or ❌ with evidence.
 - [ ] ≥ 10 scripted fixtures are committed, each with an expectation file.
-- [ ] The app installs and shows live darts on **iPhone, iPad, Android phone and a Fire OS stick**, with the iOS Local Network prompt handled.
-- [ ] **G2:** a Vega spike report (works / works with caveats / blocked) plus the cost of the Vega track.
+- [ ] The app installs **through the chosen private route** and shows live darts on **iPhone, iPad and the Fire TV Stick 4K Max** (plus an Android phone or emulator), with the iOS Local Network prompt handled.
+- [ ] `docs/install.md` lets you reinstall or update every device without help.
 - [ ] The Expo SDK / `react-native-tvos` version is chosen and recorded as an ADR.
 - [ ] CI is green on `main`.
 
 **G1 no-go contingency** (the board doesn't stream throws locally), in order of preference:
 1. Pin the detection host to the last version that does stream, and turn off auto-update. Feasibility to be confirmed in P1.
-2. Ask Autodarts GmbH in writing for a supported local API or third-party authorization.
+2. Ask Autodarts staff, through the same Discord channel that granted private use, how a home integration should read throws on 2.x.
 3. **Manual-entry arcade**: everything else in this roadmap still works.
 
-The cloud API is *not* an option without written permission (R03).
+The cloud API stays out unless Autodarts staff explicitly confirm a supported way to use it (R03).
 
 **Tests:** schema validation of fixtures; CI smoke builds for each target; a manual device checklist.
 
@@ -180,17 +182,16 @@ The cloud API is *not* an option without written permission (R03).
 - Correction flow with **dry-run preview**; provisional results; "needs review" badges.
 - Player profiles (local), guests, settings (quality tier, house rules, board control opt-in).
 - Basic audio through `AudioPort`; keep-awake; Home → pause on TV.
-- **Demo mode** (simulator) for development and App Review.
-- *Vega shell joins here if Q1 says Vega.*
+- **Demo mode** (simulator), for development and for trying games without the board.
 
 **Acceptance criteria**
 - [ ] A complete Countdown and Cricket session can be played end-to-end:
-  - **with D-pad only** on a Fire OS stick;
+  - **with D-pad only** on the Fire TV Stick 4K Max;
   - **with touch only** on iPad and on an Android phone;
   - on iPhone.
 - [ ] The common corrections (wrong bed, miss ↔ hit, add a bounce-out, void a false dart) take **≤ 5 remote presses** from W3.
 - [ ] A correction that changes the winner withdraws the victory screen and resumes play correctly.
-- [ ] The Amazon TV test criteria pass a self-audit:
+- [ ] Amazon's TV test criteria, used as a UX checklist rather than for store submission, pass a self-audit:
   - D-pad navigation everywhere;
   - Back always works;
   - 90 % screen fill;
@@ -224,12 +225,13 @@ The cloud API is *not* an option without written permission (R03).
   - sound design with a licence on file.
 
 **Acceptance criteria**
-- [ ] **Fire OS 2 GB stick, Standard tier:**
+- [ ] **Fire TV Stick 4K Max, Standard tier:**
   - foreground memory < 300 MB;
   - cold-start TTFF < 2 s;
+  - no visible stutter through the victory celebration;
   - no dropped dart events during a 3-dart celebration storm.
-- [ ] **1 GB stick, Lite tier:** foreground memory < 300 MB (Fire OS) or < 400 MiB (Vega); UI fluidity ≥ 99 % in Amazon's KPI tooling.
 - [ ] **iPad:** 60 fps sustained through the victory celebration (Instruments).
+- [ ] The Lite tier exists and is selectable, but is only tuned if a 1 GB device is added later.
 - [ ] A dart is shown on screen ≤ 150 ms after its frame arrives, on all tiers, even during effects.
 - [ ] Every shipped asset has a provenance entry. There are no third-party marks or look-alike game names.
 
@@ -237,25 +239,31 @@ The cloud API is *not* an option without written permission (R03).
 
 ---
 
-## Phase 6: Vega, companion and release hardening
+## Phase 6: Companion and home-release hardening
 
-**Goal:** finish the device story, add the phone companion, and make it robust enough for a 4-hour party.
+**Goal:** add the phone companion and make the app robust enough for a 4-hour party at home.
 
 **Scope**
-- **Vega app** (`apps/vega`): the shared packages plus `*.kepler.tsx` platform files, the Vega `AudioPort`, AsyncStorage `LogStore` and manual discovery. This only happens if G2 was "works" or "works with caveats", and is skipped if it already landed in P4.
-- **Phone companion** (optional): a LAN server in the host app, QR pairing with a one-time token, and commands for name entry, corrections and operator actions.
+- **Phone companion** (optional): a LAN server in the host app (4K Max or iPad), QR pairing with a one-time token, and commands for name entry, corrections and operator actions.
 - **Soak and resilience:** 4-hour simulated sessions with periodic board and Wi-Fi drops.
-- **Distribution:**
-  - *Private:* TestFlight internal, Play internal testing, Fire OS sideload, and Amazon Live App Testing for Vega ⚪.
-  - *Public:* only if Q2 says so, and only after Q3, Q4 and Q5 and written Autodarts permission. That route needs store listings, privacy labels, a review demo video and the demo mode.
+- **Home release:** final private builds on every household device, with a renewal reminder if the iOS route expires (R27).
 - User documentation: setup, troubleshooting, and the "your board updated and something broke" playbook.
 
 **Acceptance criteria**
-- [ ] 4-hour soak: no crash, memory growth < 10 %, and no unflagged dart discrepancy against the simulator's ground truth.
-- [ ] Vega build meets the Vega KPIs (TTFF < 1.5 s, foreground < 400 MiB, fluidity > 99 %), *or* there is a documented decision not to ship Vega.
+- [ ] 4-hour soak on the 4K Max: no crash, memory growth < 10 %, and no unflagged dart discrepancy against the simulator's ground truth.
 - [ ] Companion: pairing in under 30 s, and a correction from the phone shows on the TV in under 500 ms on the same LAN.
-- [ ] The chosen distribution path is completed end-to-end on every target device.
+- [ ] Every household device has the release build installed and updatable from `docs/install.md`.
 - [ ] Runbook: re-running the P1 probe and the golden fixtures against a new Autodarts version takes under 30 minutes.
+
+---
+
+## Backlog (not scheduled)
+
+| Item | Trigger |
+|---|---|
+| **Vega OS shell** (`apps/vega`): React Native for Vega reusing the pure-TS packages (ARCHITECTURE §5.2). Note that Vega blocks consumer sideloading 🟡[P11], so even private installs would go through Amazon's Appstore tooling ⚪ | The 4K Max is replaced by a Vega-based stick |
+| Public store release (GPL exception, product name, App Review demo mode, store listings) | A decision to publish, with Autodarts' agreement |
+| Apple TV (tvOS) build | Wanted; `react-native-tvos` makes it cheap |
 
 ---
 
@@ -270,7 +278,7 @@ The cloud API is *not* an option without written permission (R03).
 | Chaos | Disconnect, duplicate, drop and delay at every visit point | simulator + fault-proxy | CI (simulated), weekly (real board) |
 | Component | Screens and focus order | RN Testing Library | CI |
 | E2E | Scripted journeys W0→W5 on simulator / emulators incl. Android TV | Maestro or Detox (P1 pick) ⚪ | CI nightly |
-| Device | Manual acceptance on iPhone, iPad, Android phone, Fire OS stick (+ Vega) | checklists in `docs/qa/` | each phase exit |
+| Device | Manual acceptance on iPhone, iPad, Fire TV Stick 4K Max (+ an Android phone or emulator) | checklists in `docs/qa/` | each phase exit |
 | Performance | TTFF, memory, fluidity, frame→pixel latency | Xcode Instruments, Android profiler / Perfetto, Amazon KPI tooling | P4–P6 exits |
 | Soak | 4-hour sessions | simulator on device | P6 |
 

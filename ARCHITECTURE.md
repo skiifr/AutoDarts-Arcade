@@ -2,6 +2,11 @@
 
 > **Status:** Phase 0 deliverable. This is research and architecture only, and no application code exists yet.
 > **Research date:** 2026-10-26. Autodarts changed substantially in 2026, so re-check anything marked 🟡 or ⚪ before relying on it.
+> **Confirmed scope (owner, 2026-10-26):**
+> - **Private home use**, non-commercial. The owner reports that Autodarts staff permitted this via their Discord.
+> - TV target: **Fire TV Stick 4K Max (Fire OS)**.
+> - Distribution by direct install; no public store listings.
+> - See [ROADMAP Q1–Q6](ROADMAP.md#owner-decisions-answered-2026-10-26).
 > **Companion documents:** [ROADMAP.md](ROADMAP.md) · [RISK-REGISTER.md](RISK-REGISTER.md)
 
 ### Evidence legend
@@ -40,13 +45,13 @@ Every factual claim carries one of these marks. Bracketed IDs refer to [§12 Sou
 
 | # | Decision | Why |
 |---|---|---|
-| D1 | **The client is React Native + TypeScript.** Expo + `react-native-tvos` covers iOS, iPadOS, Android and Fire OS. A separate *React Native for Vega* shell covers Vega-OS Fire TV sticks. | It meets the "native app on iPhone, iPad, Android and Fire Stick" requirement and keeps the brief's React/TS direction. React Native is the only mainstream stack that reaches Vega OS ✅[P5][P10]. |
+| D1 | **The client is React Native + TypeScript.** Expo + `react-native-tvos` builds one app for iOS, iPadOS, Android and Fire OS, which includes **your Fire TV Stick 4K Max**. | It meets the "native app on iPhone, iPad, Android and Fire Stick" requirement and keeps the brief's React/TS direction. It also leaves the door open to Vega-OS sticks: React Native is the only mainstream stack that reaches Vega ✅[P5][P10]. That is a backlog item, not needed for the 4K Max. |
 | D2 | **Rendering runs on the display device, never on the Pi 4.** | Autodarts' own FAQ says a Pi 4 with a monitor is "not recommended" and "could function on the bleeding edge" ✅[S4]. |
 | D3 | **We integrate through the local board API only, read-only, with no new services.** The app talks to `ws://<board>:3180/api/events` and `GET /api/state` directly. | The cloud API is off-limits: the ToS bans unauthorised third-party software ✅[S3], and Autodarts reportedly issues no third-party client IDs 🟡[C13]. Nothing gets deployed on the Pi, which matches the brief's "do not deploy services". |
 | D4 | **The engine is event-sourced.** Game state is a pure fold over an append-only log, and corrections are new events that trigger a replay. | It makes corrections, crash recovery, reconnection and testing one mechanism instead of four. |
 | D5 | **The host device is the single writer.** | The device showing the game owns the log. Phones send *commands*, which removes multi-device conflicts. |
 | D6 | **Phase 1 opens with a go/no-go hardware probe.** | Whether Autodarts **2.x** still streams throws locally is *disputed* (🟡[C3][C2] say yes, 🟡[C4] says no). Everything else depends on it. |
-| D7 | **Owner decisions are needed on licence and name before any public store release.** | GPL-3.0 conflicts with the App Store ✅[P21][P24]. Store rules ban third-party brand names in app names ✅[P21]. The ToS forbids commercial third-party use ✅[S3]. |
+| D7 | **Private home use, installed directly.** APK sideload onto the 4K Max and Android; iOS internal distribution. No store listings. | Owner decision. The GPL, app-name and App Review concerns only apply to public store releases ✅[P21][P24]. Commercial use stays out of scope ✅[S3]. |
 
 ---
 
@@ -60,9 +65,9 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 | "Preserve existing AutoDarts detection" (assumes a stable API) | **Autodarts 2.x shipped in Sept 2026.** It removed the port-3180 Board Manager UI ("not supported from version 2 on") ✅[S1], moved to `autodarts.com`, retired the Keycloak login, and auto-updates ✅[S7]. | The adapter layer is isolated, version-detected and contract-tested. The Phase 1 probe is a gate. |
 | "Prioritize … performance on Raspberry Pi 4" | The Pi 4 is already at the edge just running detection ✅[S4]. A community report describes a Pi 4 with 3 cameras freezing at 0 FPS 🟡[C14]. | The Pi 4 does **detection only**. Rendering moves to the display device. |
 | "React/TypeScript frontend" | A web frontend can't be a native app on iPhone, iPad or Fire TV without a wrapper. App Store rule 4.2 rejects repackaged websites ✅[P21]. | **React Native** + TypeScript, which is still React. |
-| "Fire Stick" (implicit) | There are now **two Fire TV operating systems**. Fire OS (Android-based) runs on the 4K Max 2nd gen, 4K 2nd gen, 4K Plus, HD 2024 and Lite. **Vega OS** (Linux-based, *cannot run Android apps*) runs on the 4K Select 2025, HD 2026 and 4K 3rd gen 2026 ✅[P1]. Amazon says all future sticks will run Vega 🟡[P11]. | A two-track TV strategy (§3). **We need to know which stick you own.** |
-| "Inspired by BattleUp's commercial entertainment" / "premium" | Autodarts' ToS restricts the Play Services to *private, non-commercial* use. It bans commercial use by third parties through external software "not … expressly authorized in writing by Autodarts" ✅[S3 §3.2, §6.1]. | We assume a private, non-commercial project. Commercial or venue use needs written permission from Autodarts GmbH (risk R03). We use original names and art, with no BattleUp look-alikes (R08, R23). |
-| Not mentioned | Our own repo is **GPL-3.0**, which conflicts with App Store distribution. "AutoDarts" in an app name breaks Apple 4.1(c)/5.2.1. App Review needs a demo mode for hardware apps ✅[P21]. TV apps need D-pad-only UX ✅[P8]. Two local endpoints return the board's API key and TLS key 🟡[C2]. | Added to the architecture and the risk register. |
+| "Fire Stick" (implicit) | There are now **two Fire TV operating systems**. Fire OS (Android-based) runs on the 4K Max (both generations), 4K 2nd gen, 4K Plus, HD 2024 and Lite. **Vega OS** (Linux-based, *cannot run Android apps*) runs on the 4K Select 2025, HD 2026 and 4K 3rd gen 2026 ✅[P1]. Amazon says all future sticks will run Vega 🟡[P11]. | **Resolved:** your 4K Max runs Fire OS, so it runs the shared Android build. Vega is a backlog item (§3.3). |
+| "Inspired by BattleUp's commercial entertainment" / "premium" | Autodarts' ToS restricts the Play Services to *private, non-commercial* use. It bans commercial use by third parties through external software "not … expressly authorized in writing by Autodarts" ✅[S3 §3.2, §6.1]. | **Resolved:** private home use, with staff permission reported by the owner (§4.4). Original names and art remain a project principle (R23). |
+| Not mentioned | Our own repo is **GPL-3.0**, which conflicts with App Store distribution. "AutoDarts" in an app name breaks Apple 4.1(c)/5.2.1. App Review needs a demo mode for hardware apps ✅[P21]. TV apps need D-pad-only UX ✅[P8]. Two local endpoints return the board's API key and TLS key 🟡[C2]. | Store-related items are **not applicable to private installs** (R07, R08, R19 lowered). D-pad UX and secret handling still apply. |
 
 ---
 
@@ -96,11 +101,12 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 | iPhone | iOS | Expo app (universal) | touch | companion remote / small display | P1 |
 | iPad | iPadOS | same binary | touch | **primary display** | P1 |
 | Android phone or tablet | Android 7+ (API 24) ✅[P12] | Expo app, mobile profile | touch | display / companion | P1 |
-| Fire TV, **Fire OS 7/8** (4K Max 2nd gen, 4K 2nd gen, 4K Plus 2025, HD 2024, Lite 2020, 3rd gen 2020) | API 28 / 30 ✅[P1][P2] | same code, **TV build profile** (`EXPO_TV=1`) | D-pad remote | **primary display** | P1 |
-| Fire TV, **Vega OS** (4K Select 2025, HD 2026, 4K 3rd gen 2026) | Vega OS 1.1 / 2.0 ✅[P1] | separate **React Native for Vega** shell over the shared packages | D-pad remote | primary display | spike P1 → build P6 (moved to P4 if this is your stick) |
-| Apple TV (optional) | tvOS | `react-native-tvos` makes it nearly free ✅[P12] | Siri remote | display | not committed |
+| **Fire TV Stick 4K Max (your TV target)**: 1st gen 2021 = Fire OS 7, 2nd gen 2023 = Fire OS 8; 2 GB RAM, GE9215 GPU | API 28 / 30 ✅[P1][P2] | same code, **TV build profile** (`EXPO_TV=1`), sideloaded via ADB ✅[P26] | D-pad remote | **primary display** | P1 |
+| Other Fire OS sticks (4K 2nd gen, 4K Plus 2025, HD 2024, Lite 2020, 3rd gen 2020) | API 28 / 30 ✅[P1] | same build | D-pad remote | display | supported, not tested |
+| Fire TV, **Vega OS** (4K Select 2025, HD 2026, 4K 3rd gen 2026) | Vega OS 1.1 / 2.0 ✅[P1] | separate **React Native for Vega** shell over the shared packages | D-pad remote | display | **backlog**: only if the stick is replaced |
+| Apple TV (optional) | tvOS | `react-native-tvos` makes it nearly free ✅[P12] | Siri remote | display | backlog |
 
-**Hardware floor:** the 1 GB sticks (Fire OS 7 and every Vega stick, with a G310 or GE8300 GPU) are the weakest target. All visual budgets are set against them ✅[P1].
+**Performance target:** the **4K Max (2 GB)** is the weakest device in your household, so the TV visual budgets are set against it (the *Standard* tier, §9.2). The *Lite* tier for 1 GB sticks stays in the design, but is only tuned if such a device is added ✅[P1].
 
 ---
 
@@ -211,11 +217,16 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 - Using the cloud, any commercial or venue use, or a public store listing increases exposure.
 - Get written authorization before any of those.
 
-**Our repo is GPL-3.0.** FSF and Apple terms conflict. VLC was pulled from the App Store in 2011 ✅[P24].
-- While you are the **sole copyright holder** you can fix this cheaply by adding a GPLv3 §7 "app-store exception", as Signal did ✅[P25], or by dual-licensing.
-- Do this **before** accepting outside contributions or pulling in third-party GPL code. Amazon's agreement has related clauses ✅[P22].
+**Owner-attested permission (2026-10-26).** The owner reports that Autodarts staff, via the Autodarts Discord, permitted private home use of a third-party frontend.
+- We have not seen this statement, so it is recorded as **owner-attested**.
+- Keep a screenshot or message link with the project's private notes, because Discord messages aren't durable.
+- The architecture already fits that permission: local network, read-only, non-commercial, no cloud and no Autodarts credentials.
 
-**Name.** Apple 4.1(c) and 5.2.1 ban third-party brand names in app names ✅[P21]. "AutoDarts Arcade" can stay the repo name, but the shipped app needs its own name. Say "compatible with Autodarts" only with permission.
+**Our repo is GPL-3.0.** FSF and Apple terms conflict. VLC was pulled from the App Store in 2011 ✅[P24].
+- **For private installs this doesn't matter.** As the sole copyright holder you aren't bound by your own licence.
+- If the project ever takes outside contributions or goes to a store, add a GPLv3 §7 "app-store exception" first, as Signal did ✅[P25], or dual-license. Amazon's agreement has related clauses ✅[P22].
+
+**Name.** Apple 4.1(c) and 5.2.1 ban third-party brand names in app names ✅[P21]. This is irrelevant for private installs; it only matters if the app is ever published.
 
 ### 4.5 Community projects
 
@@ -325,7 +336,8 @@ Reanimated's own guidance is no more than ~100 animated components on low-end An
 |---|---|---|
 | Language | TypeScript (strict) everywhere | — |
 | Mobile + Fire OS app | Expo (prebuild / dev client, no Expo Go on TV ✅[P13]) + `react-native-tvos`. **Candidate: Expo SDK 56 + `react-native-tvos@0.85-stable`**, which is documented for TV and within 2 minors of Vega's RN 0.83 ✅[P13][P3]. Final pick at the end of Phase 1 | ⚪ |
-| Vega app | React Native for Vega (RN 0.83 track), Yarn workspace `apps/vega`, platform files `*.kepler.tsx` ✅[P10] | ⚪ until spike |
+| Vega app (backlog) | React Native for Vega (RN 0.83 track), Yarn workspace `apps/vega`, platform files `*.kepler.tsx` ✅[P10]. Not needed for the 4K Max. Shared packages stay Vega-compatible so this remains cheap | ⚪ |
+| Private distribution | Fire TV / Android: APK sideload via `adb` ✅[P26]. iOS / iPadOS: TestFlight internal 🟡[P27] or ad hoc internal distribution ⚪. Picked in P1 | ⚪ |
 | Animation | Reanimated 4 + react-native-svg + Lottie (all targets). Skia v2 as an optional "high" tier on non-Vega | ✅ availability / ⚪ performance |
 | Navigation and focus | React Navigation (Expo TV ✅[P13]). TV focus via `TVFocusGuideView` / `nextFocus*`. Vega `FocusManager` ✅[P5] | Vega navigation library ⚪ |
 | Audio | `AudioPort` interface: `expo-audio` on Expo; W3C media API on Vega 🟡 | ⚪ |
@@ -340,7 +352,7 @@ Reanimated's own guidance is no more than ~100 animated components on low-end An
 autodarts-arcade/
 ├─ apps/
 │  ├─ arcade/            Expo app → iOS, iPadOS, Android, Fire OS (EXPO_TV build profile)
-│  ├─ vega/              React Native for Vega shell (Phase 6, or P4 if your stick is Vega)
+│  ├─ vega/              React Native for Vega shell (backlog; only if a Vega stick is added)
 │  └─ devtools/          Node CLIs: board-probe, frame-recorder, fault-proxy, headless game runner
 ├─ packages/
 │  ├─ event-schema/      zod types + generated JSON Schema, versioned (arcade.event/v1)
@@ -654,8 +666,8 @@ Before release, names and mechanics are checked against BattleUp's catalogue so 
 | Tier | Devices | Budget |
 |---|---|---|
 | **High** | iPad, recent iPhones / Android | 60 fps, full particles, Skia allowed (non-Vega) |
-| **Standard** | Fire OS 8 sticks (2 GB) | ≤ 100 concurrently animated views ✅[P16]; Lottie celebrations; foreground memory < 300 MB ✅[P7] |
-| **Lite** | 1 GB sticks (Fire OS 7, all Vega) | Reduced particles, shorter transitions, static backgrounds; memory < 300 MB (Fire OS) / < 400 MiB (Vega) ✅[P6][P7] |
+| **Standard** | **Fire TV Stick 4K Max** and other 2 GB Fire OS sticks | ≤ 100 concurrently animated views ✅[P16]; Lottie celebrations; Skia v2 particles only if P5 measurements allow; foreground memory < 300 MB ✅[P7] |
+| **Lite** | 1 GB sticks (not in your household; kept for later) | Reduced particles, shorter transitions, static backgrounds; memory < 300 MB (Fire OS) / < 400 MiB (Vega) ✅[P6][P7] |
 
 - The tier is auto-selected from model and RAM, and the user can override it in Settings.
 - UI renders at 1080p logical resolution even on 4K sticks.
@@ -666,7 +678,7 @@ Before release, names and mechanics are checked against BattleUp's catalogue so 
 |---|---|---|
 | iOS / iPadOS | `NSLocalNetworkUsageDescription`. The first LAN connect triggers the **Local Network prompt** and may fail before the answer, so retry. `NSAllowsLocalNetworking = YES` (ATS blocks IP addresses by default on iOS 17+). `NSBonjourServices: ["_autodarts-board._tcp"]` for discovery. Keep-awake during games | ✅[P17][P18] |
 | Android / Fire OS | `usesCleartextTraffic` (arbitrary LAN IPs can't be listed in `domain-config`). Plan for Android 17's `ACCESS_LOCAL_NETWORK` when targeting API 37. TV profile: leanback launcher, no touch requirement, `FLAG_KEEP_SCREEN_ON` | ✅[P19][P20] |
-| Vega | Cleartext policy in the manifest (WebView blocks HTTP by default ✅[P9]). **Native `ws://` to a LAN IP is undocumented** → Phase 1 spike. No mDNS library, so discovery is manual or QR | ⚪ 🔬 |
+| Vega (backlog) | Cleartext policy in the manifest (WebView blocks HTTP by default ✅[P9]). **Native `ws://` to a LAN IP is undocumented**, so spike first if Vega is ever needed. No mDNS library, so discovery is manual or QR | ⚪ |
 
 ### 9.4 Discovery (W0 screen)
 
@@ -674,7 +686,7 @@ Before release, names and mechanics are checked against BattleUp's catalogue so 
 2. **Last-known address**.
 3. **Manual IP** entry, with a QR code shown on a phone for TV.
 4. **Subnet probe** of `:3180/api/version`, opt-in.
-5. **Demo mode**: the simulator adapter, which App Review needs ✅[P21].
+5. **Demo mode**: the simulator adapter, for development and for playing without the board. It would also satisfy App Review ✅[P21] if the app is ever published.
 
 ### 9.5 Security and privacy
 
@@ -852,13 +864,16 @@ Game names are original placeholders.
 | Pi 4 marginal for detection; don't render on it | ✅[S4] |
 | Your Pi's actual CPU, thermal and FPS headroom | 🔬 |
 | ToS bans unauthorised third-party / commercial use | ✅[S3] |
+| Autodarts staff permit this project for private home use | **Owner-attested** (Autodarts Discord); not independently verified |
+| Your TV stick (4K Max) runs Fire OS and accepts ADB sideloading | ✅[P1][P26] → 🔬 install dry run in P1 |
+| iOS private install: TestFlight internal builds last 90 days; a free Apple ID re-signs every 7 days | 🟡[P27] / 🟡 → decided in P1 |
 | No official third-party API or client IDs | ✅ (none published) / 🟡[C13] (Autodarts' reply) |
 | Fire TV models and their OS (Fire OS vs Vega) | ✅[P1] |
-| Vega can't run APKs; all future sticks Vega | 🟡[P11] |
+| Vega can't run APKs; all future sticks Vega (affects only a future replacement stick) | 🟡[P11] |
 | Expo + react-native-tvos builds for Fire OS with Reanimated, Skia, SVG, Audio | ✅[P13] (TV generally) / ⚪ Fire OS specifics → 🔬 |
 | Vega ships Reanimated 4.1.3, SVG, Lottie, AsyncStorage; no Skia or mDNS | ✅[P4] |
-| Vega app can open `ws://` to a LAN IP | ⚪ → **🔬 Phase 1 spike** |
-| Effects hit Amazon KPIs on 1 GB sticks | ⚪ → 🔬 Phase 5 |
+| Vega app can open `ws://` to a LAN IP | ⚪ (backlog; not needed for the 4K Max) |
+| Effects hit Amazon KPIs on the 4K Max | ⚪ → 🔬 Phase 5 |
 | Full-log refold ≲ 5 ms on TV-class CPU | ⚪ → Phase 3 benchmark |
 | Board→screen ≤ 150 ms | ⚪ target → 🔬 |
 
@@ -924,3 +939,5 @@ All sources accessed 2026-10-26. The decision-critical ones (S1, S3, S4, P1, P4,
 - [P23] react-native-tcp-socket: https://github.com/Rapsssito/react-native-tcp-socket
 - [P24] VLC removed from the App Store (2011): https://9to5mac.com/2011/01/07/vlc-for-ios-removed-from-the-app-store/
 - [P25] Signal's GPLv3 app-store exception: https://scancode-licensedb.aboutcode.org/signal-gpl-3.0-exception.LICENSE
+- [P26] Amazon, connect to Fire TV through ADB (Developer Options, ADB debugging, Apps from Unknown Sources): https://developer.amazon.com/docs/fire-tv/connecting-adb-to-device.html
+- [P27] Apple TestFlight (up to 100 internal testers): https://developer.apple.com/testflight/. The 90-day build lifetime and "no review for internal testers" come from third-party guides such as https://instabug.com/blog/testflight-guide 🟡
