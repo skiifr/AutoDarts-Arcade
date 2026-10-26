@@ -1,6 +1,7 @@
 import {
   isBoardFact,
   points,
+  sameSegment,
   type ArcadeEvent,
   type EventOf,
   type EventSource,
@@ -91,6 +92,13 @@ export interface BoardDart {
   /** The adapter could not read its latest segment (`pendingReview`): its turn is flagged. */
   pendingReview: boolean;
   withdrawn: boolean;
+  /**
+   * The board said something about this dart that a person's earlier word overrides: it
+   * updated a dart the person voided, re-read one they corrected as something else, or
+   * withdrew one they corrected. The person wins (Decider), but the board's ids follow its own
+   * positions, so the fact may really be about another dart: its turn is flagged.
+   */
+  disputed: boolean;
   /** What was going on when the board reported it. */
   readonly phase: 'baseline' | 'turn' | 'review' | 'idle';
   readonly eventId: string;
@@ -325,7 +333,8 @@ export class SessionFolder {
 
   /**
    * The turn will be flagged when it ends, whatever ends it (§7.5): a recovered or pendingReview
-   * dart, more than three darts in one visit, or a review pause behind it. A review pause holds
+   * dart, more than three darts in one visit, a dart the board and a person disagree about
+   * (`BoardDart.disputed`, voided ones too), or a review pause behind it. A review pause holds
    * the game after a takeout that may have happened offline, and the outage may have hidden any
    * number of visits (or none). So whoever the game names next when it ends (`afterReview`),
    * and whoever gets the darts that arrived meanwhile (held darts, also in the turns after that),
@@ -336,6 +345,7 @@ export class SessionFolder {
     return (
       turn.afterReview ||
       live.length > 3 ||
+      turn.entries.some((d) => this.boardDarts.get(d.throwId)?.disputed === true) ||
       live.some((d) => {
         const bd = this.boardDarts.get(d.throwId);
         return d.origin === 'recovered' || bd?.pendingReview === true || bd?.phase === 'review';
@@ -455,6 +465,8 @@ export class SessionFolder {
         return this.onDartDetected(e);
       case 'DartUpdated': {
         const bd = this.boardDarts.get(e.payload.throwId);
+        const rec = this.darts.get(e.payload.throwId);
+        if (bd && rec && this.overrules(rec, bd) && (rec.voided !== null || !sameSegment(rec.segment, e.payload.segment))) this.dispute(bd);
         if (bd) {
           bd.segment = e.payload.segment;
           const pending = e.payload.pendingReview === true;
@@ -467,6 +479,8 @@ export class SessionFolder {
       }
       case 'DartWithdrawn': {
         const bd = this.boardDarts.get(e.payload.throwId);
+        const rec = this.darts.get(e.payload.throwId);
+        if (bd && rec && rec.voided === null && this.overrules(rec, bd)) this.dispute(bd);
         if (bd) {
           bd.withdrawn = true;
           this.held.delete(bd.throwId);
@@ -624,6 +638,7 @@ export class SessionFolder {
       recovered: p.recovered === true,
       pendingReview: p.pendingReview === true,
       withdrawn: false,
+      disputed: false,
       phase,
       eventId: e.eventId,
       seq: e.seq,
@@ -638,6 +653,21 @@ export class SessionFolder {
       this.held.add(bd.throwId);
       this.holdVisit(bd.visitKey);
     }
+  }
+
+  /**
+   * A person's word about `rec` stands over the board's (a correction, or a void other than the
+   * board's own withdrawal), and the board is not just clearing a visit it reset.
+   */
+  private overrules(rec: DartRecord, bd: BoardDart): boolean {
+    const byPerson = rec.userCorrected || (rec.voided !== null && rec.voided !== 'source-withdrawn');
+    return byPerson && this.visits.get(bd.visitKey)?.ended?.kind !== 'reset';
+  }
+
+  private dispute(bd: BoardDart): void {
+    if (bd.disputed) return;
+    bd.disputed = true;
+    if (bd.attributedTo !== null) this.touch(bd.attributedTo);
   }
 
   /** Between turns, waiting for a person to confirm a turn that ended on an inferred takeout. */

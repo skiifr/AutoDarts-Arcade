@@ -218,6 +218,52 @@ describe('turn policy (ARCHITECTURE §8.3, §6.3)', () => {
     expect(labels(rig, 0)).toEqual(['S20']);
   });
 
+  describe('the board contradicts what a person said about a dart: the person wins, and the turn is flagged', () => {
+    // The board's facts follow its throw ids, and an id can move to another physical dart (the
+    // positions shift when an earlier dart is withdrawn). Ignoring such a fact silently lost or
+    // doubled a dart in the e2e oracle with the user bot (seed 428) and in probe 2a.
+    it('an update of a dart the person voided (e2e seed 428: the board withdrew the voided dart, shifting the next one onto its id)', async () => {
+      const rig = await started('test-sum');
+      const { board, cmd } = rig;
+      const a = board.dart(S2);
+      const b = board.dart(S1);
+      const c = board.dart(S5);
+      await rig.run(a, b, c, cmd.void(b.throwId));
+      const [upd, w, end] = await rig.run(board.update(b.throwId, S1, S5), board.withdraw(c.throwId), board.takeout());
+      expect(types(upd)).toEqual(['DartUpdated']);
+      expect(types(w)).toEqual(['DartWithdrawn', 'DartVoided']);
+      expect(find(end, 'TurnEnded')[0]!.payload).toMatchObject({ playerId: A.playerId, needsReview: true });
+      expect(labels(rig, 0)).toEqual(['S2', 'MISS', 'MISS']);
+    });
+
+    it('a withdrawal of a dart the person corrected (probe 2a: kept, so it could count twice)', async () => {
+      const rig = await started('test-sum');
+      const { board, cmd } = rig;
+      const a = board.dart(S1);
+      const b = board.dart(S5);
+      await rig.run(a, b, cmd.correct(b.throwId, S20));
+      const [, w, end] = await rig.run(board.update(a.throwId, S1, S5), board.withdraw(b.throwId), board.takeout());
+      expect(types(w)).toEqual(['DartWithdrawn']);
+      expect(find(end, 'TurnEnded')[0]!.payload.needsReview).toBe(true);
+      expect(labels(rig, 0)).toEqual(['S5', 'S20', 'MISS']);
+    });
+
+    it('an update of a corrected dart to another segment; but not a board that agrees, nor a withdrawal of a voided dart', async () => {
+      const rig = await started('test-sum');
+      const { board, cmd } = rig;
+      const a = board.dart(S1);
+      const b = board.dart(S5);
+      await rig.run(a, b, cmd.correct(a.throwId, S20), cmd.void(b.throwId));
+      const [, , end] = await rig.run(board.update(a.throwId, S1, S20), board.withdraw(b.throwId), board.takeout());
+      expect(find(end, 'TurnEnded')[0]!.payload.needsReview).toBeUndefined();
+      const c = board.dart(S1);
+      await rig.run(c, cmd.correct(c.throwId, S20));
+      const [, end2] = await rig.run(board.update(c.throwId, S1, S2), board.takeout());
+      expect(find(end2, 'TurnEnded')[0]!.payload.needsReview).toBe(true);
+      expect(labels(rig, 1)).toEqual(['S20', 'MISS', 'MISS']);
+    });
+  });
+
   it('voids a dart the board withdraws', async () => {
     const rig = await started('test-sum');
     const d = rig.board.dart(S5);
