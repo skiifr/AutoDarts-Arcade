@@ -188,7 +188,8 @@ describe('connection lifecycle (§6.4)', () => {
     rig.board.throwDart({ segment: 'T19' });
     rig.adapter.resync();
     await rig.sched.advance(100);
-    expect(brief(rig.facts)).toEqual(['takeout-end inferred', 'detect 0:T19 recovered']);
+    // 100 ms is too short for a whole visit to come and go: the dart continues the visit.
+    expect(brief(rig.facts)).toEqual(['detect 0:T19 recovered']);
   });
 
   it('stop() closes the socket and goes quiet', async () => {

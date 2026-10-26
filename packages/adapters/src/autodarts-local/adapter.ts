@@ -3,6 +3,8 @@ import type { BoardGetPath } from '../endpoints';
 import { Listeners, type BoardSource, type Clock, type EventsSocket, type FactListener, type HttpResponse, type IdSource, type RandomSource, type Scheduler, type TimerHandle, type Transport } from '../ports';
 import { MAX_FRAME_CHARS, excerpt, parseEventFrame, parseStateBody } from '../raw';
 import { RawFrameRing, type RawChannel } from '../ring-buffer';
+import { epochMsFromIso } from '../simulator/iso-time';
+import type { RestoredVisitState } from './rebuild';
 import { toSnapshot, type Snapshot } from './snapshot';
 import { boardStatusOf, isKnownStatus, isStuckTakeoutCandidate, parseVersion, profileFor, type BoardStatus } from './status';
 import { VisitTracker, type ApplyMode, type TrackerFact, type VisitState } from './visit-tracker';
@@ -40,6 +42,12 @@ export interface AdapterTiming {
   requestTimeoutMs: number;
   /** A takeout on an empty board longer than this is reported as stuck (§6.3, R13). */
   stuckTakeoutMs: number;
+  /**
+   * Heartbeat while online. The board pushes every change and is silent otherwise, so an open,
+   * healthy socket means its state is known: each heartbeat that fires on time counts as
+   * contact (see `awayMs`).
+   */
+  contactTickMs: number;
 }
 
 export const DEFAULT_TIMING: AdapterTiming = {
@@ -53,7 +61,18 @@ export const DEFAULT_TIMING: AdapterTiming = {
   livenessRetryMs: 1000,
   requestTimeoutMs: 2000,
   stuckTakeoutMs: 8000,
+  contactTickMs: 1000,
 };
+
+/** A heartbeat this late means the app was suspended or the device slept: it proves nothing. */
+const LATE_TICK_MS = 500;
+
+/**
+ * When a connection breaks, the frames the board sent in its last moments may never have
+ * arrived (they were in flight, or the link died before the device noticed). Contact counts
+ * only up to this long before the break.
+ */
+export const LINK_LOSS_MS = 1000;
 
 export type ConnectionPhase = 'stopped' | 'connecting' | 'resyncing' | 'online' | 'offline';
 
@@ -71,8 +90,8 @@ export interface AutodartsLocalOptions {
   ids: IdSource;
   /** Backoff jitter. */
   random: RandomSource;
-  /** Visit state rebuilt from the log after a crash (`rebuildVisitState`). */
-  restored?: VisitState;
+  /** Visit state rebuilt from the log after a crash (`rebuildVisitState`). See also `restore()`. */
+  restored?: RestoredVisitState;
   /**
    * Open `/api/events?type=state` instead of the bare path. Default: the version profile
    * (`profileFor`), which opens the bare path for every version and filters frames by type.
@@ -112,7 +131,7 @@ export class AutodartsLocalAdapter implements BoardSource {
   private readonly t: AdapterTiming;
   private readonly facts: Listeners<BoardFactDraft>;
   private readonly statusListeners: Listeners<ConnectionStatus>;
-  private readonly tracker: VisitTracker;
+  private tracker: VisitTracker;
 
   private phase: ConnectionPhase = 'stopped';
   private gen = 0;
@@ -135,6 +154,18 @@ export class AutodartsLocalAdapter implements BoardSource {
   private pollFailures = 0;
   private confirmRounds = 0;
 
+  /**
+   * The last moment the board's state was known (monotonic and wall-clock ms; null when
+   * unknown): a frame, a state read, or an on-time heartbeat of a healthy online socket.
+   * `evidence` counts only frames and state reads, for when the socket itself is in doubt.
+   */
+  private contact: { mono: number | null; wall: number | null } = { mono: null, wall: null };
+  private evidence: { mono: number | null; wall: number | null } = { mono: null, wall: null };
+  private tickTimer: TimerHandle | null = null;
+  private tickArmed: { mono: number; wall: number | null } = { mono: 0, wall: null };
+  /** A liveness poll is out because the socket went quiet: heartbeats prove nothing meanwhile. */
+  private socketInDoubt = false;
+
   private boardStatus: BoardStatus | undefined;
   private stuckReported = false;
   private readonly anomalyKeys = new Set<string>();
@@ -147,6 +178,7 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.statusListeners = new Listeners<ConnectionStatus>(options.onListenerError);
     this.ring = options.ring ?? new RawFrameRing();
     this.tracker = new VisitTracker(options.ids, options.restored);
+    this.restoreContact(options.restored);
   }
 
   // ── public API ───────────────────────────────────────────────────────────
@@ -177,6 +209,17 @@ export class AutodartsLocalAdapter implements BoardSource {
     return this.tracker.state();
   }
 
+  /**
+   * Crash-resume (§6.5): continue from the visit state rebuilt from the session's log
+   * (`rebuildVisitState`) instead of a fresh one. Only while stopped; the next `start()`
+   * resyncs against it, judging the outage from the log's last contact.
+   */
+  restore(state: RestoredVisitState): void {
+    if (this.phase !== 'stopped') throw new Error('restore() needs a stopped adapter');
+    this.tracker = new VisitTracker(this.o.ids, state);
+    this.restoreContact(state);
+  }
+
   start(): void {
     if (this.phase !== 'stopped') return;
     this.attempt = 0;
@@ -184,6 +227,7 @@ export class AutodartsLocalAdapter implements BoardSource {
   }
 
   stop(): void {
+    this.endContact();
     this.gen++;
     this.teardown();
     this.clear('connectTimer');
@@ -197,6 +241,7 @@ export class AutodartsLocalAdapter implements BoardSource {
    */
   resync(): void {
     if (this.phase === 'stopped') return;
+    this.endContact();
     this.gen++;
     this.teardown();
     this.clear('connectTimer');
@@ -302,8 +347,10 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.buffered = [];
     const correlationId = this.resyncCorrelation ?? this.o.ids();
     let needsConfirm = false;
+    const awayMs = this.awayMs();
+    this.markContact(true);
     queue.forEach((snap, i) => {
-      if (i === 0) this.applySnapshot(snap, 'resync', correlationId);
+      if (i === 0) this.applySnapshot(snap, 'resync', correlationId, awayMs);
       else if (this.tracker.classifyFrame(snap) === 'apply') this.applySnapshot(snap, 'live');
       else needsConfirm = true;
     });
@@ -313,7 +360,9 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.emitConnection('online');
     this.resyncCorrelation = undefined;
     this.attempt = 0;
+    this.socketInDoubt = false;
     this.armLiveness();
+    this.armTick();
     if (needsConfirm) this.requestPoll();
   }
 
@@ -336,7 +385,11 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.emitConnection('offline', error);
   }
 
-  private connectionLost(error: string): void {
+  private connectionLost(error: string, socketWasQuiet = false): void {
+    // A socket that went quiet may have been dead since its last frame: heartbeats since then
+    // proved nothing.
+    if (socketWasQuiet) this.contact = { ...this.evidence };
+    else this.endContact();
     this.gen++;
     this.teardown();
     this.phase = 'offline';
@@ -352,6 +405,8 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.clear('openTimer');
     this.clear('livenessTimer');
     this.clear('stuckTimer');
+    this.clear('tickTimer');
+    this.socketInDoubt = false;
     this.pollInFlight = false;
     this.pollAgain = false;
     this.confirmRounds = 0;
@@ -373,7 +428,10 @@ export class AutodartsLocalAdapter implements BoardSource {
   private onFrame(text: string): void {
     this.record('WS /api/events', text);
     this.pollFailures = 0; // a frame proves the socket is alive
-    if (this.phase === 'online') this.armLiveness();
+    if (this.phase === 'online') {
+      this.markContact(false);
+      this.socketInDoubt = false;
+    }
     if (text.length > MAX_FRAME_CHARS) {
       this.anomalyOnce(`frame over ${MAX_FRAME_CHARS} chars dropped`, text);
       return;
@@ -383,7 +441,13 @@ export class AutodartsLocalAdapter implements BoardSource {
       this.anomalyOnce(parsed.note, text);
       return;
     }
-    if (parsed.kind === 'other') return; // motion_state, cam_state, stats, cam_stats
+    // motion_state, cam_state, stats, cam_stats: they show the socket is alive but say nothing
+    // about the darts, so they do not hold off the liveness poll (the self-healing read).
+    if (parsed.kind === 'other') return;
+    if (this.phase === 'online') {
+      this.markContact(true);
+      this.armLiveness();
+    }
     const snap = toSnapshot(parsed.data);
     if (this.phase === 'resyncing') {
       this.buffered.push(snap);
@@ -412,6 +476,8 @@ export class AutodartsLocalAdapter implements BoardSource {
         this.pollFailures = 0;
         const parsed = res.status === 200 ? parseStateBody(res.body) : null;
         if (parsed?.ok) {
+          this.markContact(true);
+          this.socketInDoubt = false;
           const snap = toSnapshot(parsed.data);
           const fresh = this.tracker.changeCount === changesAtIssue;
           if (fresh || this.confirmRounds >= MAX_CONFIRM_ROUNDS || this.tracker.classifyFrame(snap) === 'apply') {
@@ -436,7 +502,7 @@ export class AutodartsLocalAdapter implements BoardSource {
         this.pollInFlight = false;
         this.pollAgain = false;
         this.pollFailures++;
-        if (this.pollFailures >= 2) this.connectionLost(`liveness: ${errorText(err)}`);
+        if (this.pollFailures >= 2) this.connectionLost(`liveness: ${errorText(err)}`, true);
         else this.livenessTimer = this.o.scheduler.setTimeout(() => this.livenessFired(), this.t.livenessRetryMs);
       },
     );
@@ -450,7 +516,80 @@ export class AutodartsLocalAdapter implements BoardSource {
 
   private livenessFired(): void {
     this.livenessTimer = null;
+    this.socketInDoubt = true;
     this.requestPoll();
+  }
+
+  // ── contact: how long the board was out of sight (decision R, MIN_UNSEEN_VISIT_MS) ──
+
+  private wallNow(): number | null {
+    return epochMsFromIso(this.o.clock()) ?? null;
+  }
+
+  private markContact(evidence: boolean): void {
+    const at = { mono: this.o.scheduler.now(), wall: this.wallNow() };
+    this.contact = at;
+    if (evidence) this.evidence = { ...at };
+  }
+
+  /** The connection ends (it broke, or we let it go): contact counts only up to LINK_LOSS_MS before now. */
+  private endContact(): void {
+    if (this.phase !== 'online') return;
+    const cap = { mono: this.o.scheduler.now() - LINK_LOSS_MS, wall: this.wallNow() };
+    if (cap.wall !== null) cap.wall -= LINK_LOSS_MS;
+    const e = this.evidence;
+    const c = this.contact;
+    const pick = (cv: number | null, capv: number | null, ev: number | null): number | null => {
+      if (cv === null) return ev;
+      const capped = capv === null ? cv : Math.min(cv, capv);
+      return ev === null ? capped : Math.max(ev, capped);
+    };
+    this.contact = { mono: pick(c.mono, cap.mono, e.mono), wall: pick(c.wall, cap.wall, e.wall) };
+  }
+
+  private restoreContact(state: RestoredVisitState | undefined): void {
+    const wall = state?.observedAt === undefined ? null : (epochMsFromIso(state.observedAt) ?? null);
+    this.contact = { mono: null, wall };
+    this.evidence = { mono: null, wall };
+  }
+
+  /**
+   * How long the board has been out of sight: since the last contact, on the monotonic and on
+   * the wall clock, whichever is longer (the monotonic clock may stop while the device sleeps;
+   * the wall clock survives a crash). Undefined when neither is known: then anything may
+   * have happened.
+   */
+  private awayMs(): number | undefined {
+    const spans: number[] = [];
+    if (this.contact.mono !== null) spans.push(this.o.scheduler.now() - this.contact.mono);
+    const wall = this.wallNow();
+    if (this.contact.wall !== null && wall !== null && wall >= this.contact.wall) spans.push(wall - this.contact.wall);
+    return spans.length === 0 ? undefined : Math.max(...spans);
+  }
+
+  private armTick(): void {
+    this.clear('tickTimer');
+    if (this.phase !== 'online') return;
+    this.tickArmed = { mono: this.o.scheduler.now(), wall: this.wallNow() };
+    this.tickTimer = this.o.scheduler.setTimeout(() => this.tick(), this.t.contactTickMs);
+  }
+
+  private tick(): void {
+    this.tickTimer = null;
+    if (this.phase !== 'online') return;
+    const limit = this.t.contactTickMs + LATE_TICK_MS;
+    const wall = this.wallNow();
+    const onTime =
+      this.o.scheduler.now() - this.tickArmed.mono <= limit &&
+      (wall === null || this.tickArmed.wall === null || wall - this.tickArmed.wall <= limit);
+    if (onTime) {
+      if (!this.socketInDoubt && this.socket !== null) this.markContact(false);
+    } else if (!this.pollInFlight) {
+      // We were frozen (suspended, asleep): ask the board what happened meanwhile.
+      this.socketInDoubt = true;
+      this.requestPoll();
+    }
+    this.armTick();
   }
 
   /** A GET bounded twice: by the transport's timeout and, should it never settle, by a watchdog. */
@@ -489,11 +628,11 @@ export class AutodartsLocalAdapter implements BoardSource {
 
   // ── applying snapshots ───────────────────────────────────────────────────
 
-  private applySnapshot(snap: Snapshot, mode: ApplyMode, correlationId?: string): void {
+  private applySnapshot(snap: Snapshot, mode: ApplyMode, correlationId?: string, awayMs?: number): void {
     for (const note of snap.notes) this.anomalyOnce(note, snap.raw);
     for (const t of snap.throws) for (const note of t.notes) this.anomalyOnce(note, snap.raw);
     this.o.observer?.beforeApply?.(snap, mode);
-    const facts = this.tracker.apply(snap, mode);
+    const facts = this.tracker.apply(snap, mode, awayMs);
     for (const f of facts) this.emitTrackerFact(f, correlationId);
     this.handleStatus(snap, correlationId);
   }
@@ -595,7 +734,7 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.ring.push(this.o.clock(), channel, text);
   }
 
-  private clear(name: 'connectTimer' | 'openTimer' | 'livenessTimer' | 'stuckTimer'): void {
+  private clear(name: 'connectTimer' | 'openTimer' | 'livenessTimer' | 'stuckTimer' | 'tickTimer'): void {
     const h = this[name];
     if (h !== null) {
       this.o.scheduler.clearTimeout(h);

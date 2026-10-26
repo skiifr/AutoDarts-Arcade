@@ -4,8 +4,9 @@ import { createUlidSource, seededRandom } from '../random';
 import { BoardFactDraftSchemaCheck } from '../testing/schema-check';
 import { BoardModel, rawSegmentOf } from './board-model';
 import { SimulatorSource, scriptToFacts } from './dart-source';
+import { FakeBoardTransport } from './fake-transport';
 import { coordsFor, parseLabel, randomSegment } from './geometry';
-import { isoFromEpochMs } from './iso-time';
+import { epochMsFromIso, isoFromEpochMs } from './iso-time';
 import { SCENARIOS, runScenario } from './scenarios';
 import { VirtualScheduler } from './virtual-scheduler';
 import { normalizeSegment } from '../normalize';
@@ -164,6 +165,23 @@ describe('BoardModel', () => {
   });
 });
 
+describe('FakeBoardTransport faults', () => {
+  it('dropBreaksSocket: a lost frame takes its connection with it, as on a real network', async () => {
+    const sched = new VirtualScheduler();
+    const board = new BoardModel({ random: seededRandom(1) });
+    const transport = new FakeBoardTransport({ board, scheduler: sched, random: seededRandom(2), faults: { drop: 1, dropBreaksSocket: true } });
+    const seen: string[] = [];
+    const closes: string[] = [];
+    transport.openEvents({ stateOnly: false }, { onOpen: () => seen.push('open'), onMessage: (t) => seen.push(t), onClose: (i) => closes.push(i.error ?? '') });
+    await sched.advance(20);
+    board.throwDart();
+    await sched.advance(400);
+    expect(seen).toEqual(['open']);
+    expect(closes).toEqual(['connection lost']);
+    expect(transport.openSockets).toBe(0);
+  });
+});
+
 describe('scenarios', () => {
   it.each(Object.keys(SCENARIOS))('%s runs on the board model', async (name) => {
     const sched = new VirtualScheduler();
@@ -191,6 +209,18 @@ describe('ids and time', () => {
   it('isoFromEpochMs matches Date#toISOString', () => {
     for (const ms of [0, 951_782_400_000, EPOCH, EPOCH + 86_399_999, 4_102_444_800_123]) {
       expect(isoFromEpochMs(ms)).toBe(new Date(ms).toISOString());
+    }
+  });
+
+  it('epochMsFromIso inverts it and matches Date.parse', () => {
+    for (const ms of [0, 951_782_400_000, 951_868_799_999, EPOCH, EPOCH + 86_399_999, 4_102_444_800_123]) {
+      expect(epochMsFromIso(isoFromEpochMs(ms))).toBe(ms);
+    }
+    for (const iso of ['2026-11-02T21:14:03.120+01:00', '2026-11-02T15:44:03-04:30', '2024-02-29T23:59:59.9999Z']) {
+      expect(epochMsFromIso(iso)).toBe(Date.parse(iso));
+    }
+    for (const bad of ['', 'yesterday', '2026-13-02T20:00:00Z', '2026-11-02 20:00:00Z', '2026-11-02T20:00:00']) {
+      expect(epochMsFromIso(bad)).toBeUndefined();
     }
   });
 });

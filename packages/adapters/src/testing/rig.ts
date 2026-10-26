@@ -35,6 +35,8 @@ export interface RigOptions {
   validate?: boolean;
   observer?: AutodartsLocalOptions['observer'];
   onListenerError?: AutodartsLocalOptions['onListenerError'];
+  /** Extra ms on the adapter's wall clock (not its scheduler): a device that slept, a clock that jumped. */
+  wallSkewMs?: () => number;
   /** Put a test transport between the adapter and the fake one (`rig.transport` stays the fake one). */
   wrapTransport?: (inner: FakeBoardTransport) => Transport;
 }
@@ -48,7 +50,7 @@ export function makeRig(options: RigOptions = {}): Rig {
   const board = new BoardModel({ random: boardRandom, now: () => sched.now(), ...options.board });
   const transport = new FakeBoardTransport({ board, scheduler: sched, random: netRandom, faults: options.faults, latencyMs: options.latencyMs });
   const ids = createUlidSource({ now: () => EPOCH + sched.now(), random: seededRandom(`ids:${String(seed)}`) });
-  const clock = (): string => isoFromEpochMs(EPOCH + sched.now());
+  const clock = (): string => isoFromEpochMs(EPOCH + sched.now() + (options.wallSkewMs?.() ?? 0));
   const adapter = new AutodartsLocalAdapter({
     transport: options.wrapTransport ? options.wrapTransport(transport) : transport,
     scheduler: sched,
