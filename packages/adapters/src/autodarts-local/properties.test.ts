@@ -147,8 +147,14 @@ describe('properties', () => {
           const board = logging(t);
           board.apply(toSnapshot({ status: 'Throw', event: 'Started' }), 'resync');
           statesOf(seed, actions, rate).forEach((s, i) => {
-            board.apply(s, resyncs[i % resyncs.length] ? 'resync' : 'live', 1000);
+            const facts = board.apply(s, resyncs[i % resyncs.length] ? 'resync' : 'live', 1000);
             const rebuilt = rebuildVisitState(board.log, () => '01JBX00000000000000000000V');
+            // The board's event is only guessed from the log, but exactly when the last snapshot
+            // logged a fact that says what the board did.
+            const telling = facts.some(
+              (f) => f.type === 'DartDetected' || f.type === 'TakeoutStarted' || f.type === 'VisitReset' || (f.type === 'TakeoutFinished' && !f.payload.inferred),
+            );
+            if (telling) expect(rebuilt.boardEvent).toBe(t.state().boardEvent);
             const own = t.state();
             expect(rebuilt.known).toEqual(own.known);
             expect(rebuilt.recentVisits).toEqual(own.recentVisits);
@@ -176,9 +182,11 @@ describe('properties', () => {
         // A new launch mints ids of its own.
         const relaunch = createUlidSource({ now: () => 1_893_456_000_000, random: seededRandom('relaunch') });
         const restored = rebuildVisitState(board.log, relaunch);
-        // The one known gap: a takeout called off with 3 darts logs nothing (see rebuild.ts and
-        // the test below), so the resumed tracker may still be in it.
+        // The known gaps: a takeout called off with 3 darts logs nothing (see rebuild.ts and the
+        // test below), so the resumed tracker may still be in it; and the board's last event is
+        // only guessed from the last board fact (a snapshot that changed nothing logged nothing).
         if (restored.inTakeout !== t.state().inTakeout) return;
+        if (restored.boardEvent !== t.state().boardEvent) return;
         const resumed = new VisitTracker(relaunch, restored);
         // Darts known before the crash keep their ids in both; later ones are named in detection order.
         const namer = (): ((fs: TrackerFact[]) => string[]) => {

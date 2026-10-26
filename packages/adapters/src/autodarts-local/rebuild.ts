@@ -15,6 +15,9 @@ export interface RestoredVisitState extends VisitState {
   observedAt?: string;
 }
 
+/** A takeout seen ending, whose board event depends on the board status logged after it. */
+const TAKEOUT_END = 'takeout end';
+
 /** Facts that are only emitted while reading the board's state. */
 function isContact(e: FactLike): boolean {
   switch (e.type) {
@@ -51,6 +54,13 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
   /** The board status last logged, and whether the last visit's takeout still shows (`takeoutTail`). */
   let boardStatus: string | undefined;
   let tail = false;
+  /** The open visit has had darts (even if all were withdrawn since: `allWithdrawn`). */
+  let hadDarts = false;
+  /**
+   * The board's event as the last board fact implies it (`boardEvent`). Snapshots that changed
+   * nothing logged nothing, so this is a guess; unknown after an inferred takeout.
+   */
+  let boardEvent: string | undefined;
 
   const endVisit = (keep = true): void => {
     // Like the tracker: darts voided by a manual reset are not remembered.
@@ -59,6 +69,7 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
     visitKey = null;
     known = [];
     inTakeout = false;
+    hadDarts = false;
   };
 
   for (const e of events as readonly (BoardFact & { occurredAt?: string })[]) {
@@ -71,6 +82,8 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
           if (visitKey !== null) endVisit();
           visitKey = p.visitKey;
         }
+        hadDarts = true;
+        boardEvent = 'Throw detected';
         const dart: KnownDart = { throwId: p.throwId, segment: p.segment, indexInVisit: p.indexInVisit };
         if (p.coords) dart.coords = p.coords;
         // Flagged where the last visit's dart was: the tracker's suspected ghost, which stays flagged.
@@ -86,6 +99,8 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
       }
       case 'DartUpdated': {
         const p = e.payload;
+        // A re-read is a "Throw detected"; a flag alone (the segment unchanged) says nothing of the board.
+        if (p.previous.label !== p.segment.label) boardEvent = 'Throw detected';
         // A flagged update leaves the dart in doubt for the rest of its visit. The log cannot tell
         // an unreadable re-read (which a later clean re-read settles) from a doubtful dart (which
         // nothing settles), so the rebuilt state keeps the doubt: more flags, never fewer (decision R).
@@ -101,6 +116,7 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
         break;
       case 'TakeoutStarted':
         tail = false;
+        boardEvent = 'Takeout started';
         if (visitKey === null) visitKey = e.payload.visitKey;
         if (e.payload.visitKey === visitKey) inTakeout = true;
         break;
@@ -109,11 +125,15 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
           // Ended while the board still showed the takeout (its status logged no change, and no
           // new takeout followed): the last dart came out before the board's "Takeout finished".
           tail = boardStatus === 'takeout' && known.length > 0;
+          // Seen ending: "Takeout finished", or, if the board still shows the takeout, "Takeout started"
+          // (settled at the end, once the board status that follows is known).
+          boardEvent = e.payload.inferred ? undefined : TAKEOUT_END;
           endVisit();
         }
         break;
       case 'VisitReset':
         tail = false;
+        boardEvent = 'Manual reset';
         if (visitKey === null || e.payload.visitKey === visitKey) endVisit(false);
         break;
       case 'BoardStatusChanged': {
@@ -135,6 +155,9 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
   }
   const state: RestoredVisitState = { visitKey: visitKey ?? ids(), known: known.filter(Boolean), inTakeout, recentVisits: recent };
   if (tail) state.takeoutTail = true;
+  if (hadDarts && state.known.length === 0) state.allWithdrawn = true;
+  const event = boardEvent === TAKEOUT_END ? (tail ? 'Takeout started' : 'Takeout finished') : boardEvent;
+  if (event !== undefined) state.boardEvent = event;
   if (observedAt !== undefined) state.observedAt = observedAt;
   return state;
 }

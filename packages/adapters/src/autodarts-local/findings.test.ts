@@ -264,6 +264,80 @@ describe('finding 2, without coordinates: the board removes a dart that is not t
   });
 });
 
+describe('a visit boundary the app did not see still ends the visit (e2e seeds 387, 1725, 1421, 1900, 267, 955)', () => {
+  /** Board facts after `from`, keyed by visit: the visitKeys in the order they appear. */
+  const keys = (facts: readonly BoardFactDraft[]): string[] => [
+    ...new Set(facts.flatMap((f) => (f.type === 'DartDetected' || f.type === 'TakeoutFinished' || f.type === 'VisitReset' ? [f.payload.visitKey] : []))),
+  ];
+
+  async function betweenVisits(): Promise<Rig> {
+    const rig = await online();
+    rig.board.throwDart({ segment: 'T20' });
+    await rig.sched.advance(300);
+    rig.board.takeout();
+    await rig.sched.advance(1000);
+    return rig;
+  }
+
+  it('a reset after the board withdrew every dart ends the visit', async () => {
+    const rig = await online();
+    rig.board.throwDart({ segment: 'S1' });
+    await rig.sched.advance(300);
+    rig.board.withdraw();
+    await rig.sched.advance(300);
+    rig.board.manualReset();
+    await rig.sched.advance(300);
+    rig.board.throwDart({ segment: 'S2' });
+    await rig.sched.advance(300);
+    expect(brief(rig.facts)).toEqual(['detect 0:S1', 'withdraw', 'reset', 'detect 0:S2']);
+    expect(keys(rig.facts)).toHaveLength(2);
+  });
+
+  it.each([
+    ['its takeout', (rig: Rig) => rig.board.takeout()],
+    ['its reset', (rig: Rig) => rig.board.manualReset()],
+  ])('a visit whose darts were all withdrawn: %s during a short outage ends it', async (_label, end) => {
+    const rig = await online();
+    rig.board.throwDart({ segment: 'S1' });
+    await rig.sched.advance(300);
+    rig.board.withdraw();
+    await rig.sched.advance(300);
+    const from = rig.facts.length;
+    rig.transport.setReachable(false);
+    await rig.sched.advance(100);
+    end(rig);
+    await rig.sched.advance(200);
+    rig.transport.setReachable(true);
+    await rig.sched.advance(1000);
+    expect(brief(rig.facts.slice(from))).toEqual(['takeout-end inferred']);
+  });
+
+  it.each([
+    ['thrown and reset', (rig: Rig) => (rig.board.throwDart({ segment: 'S7' }), rig.board.manualReset())],
+    ['thrown and withdrawn', (rig: Rig) => (rig.board.throwDart({ segment: 'S7' }), rig.board.withdraw())],
+  ])('between visits, a dart %s inside a short outage: a visit may have passed, inferred', async (_label, during) => {
+    const rig = await betweenVisits();
+    const from = rig.facts.length;
+    rig.transport.setReachable(false);
+    await rig.sched.advance(100);
+    during(rig);
+    await rig.sched.advance(200);
+    rig.transport.setReachable(true);
+    await rig.sched.advance(1000);
+    expect(brief(rig.facts.slice(from))).toEqual(['takeout-end inferred']);
+  });
+
+  it('between visits, a short outage in which nothing happened: nothing', async () => {
+    const rig = await betweenVisits();
+    const from = rig.facts.length;
+    rig.transport.setReachable(false);
+    await rig.sched.advance(300);
+    rig.transport.setReachable(true);
+    await rig.sched.advance(1000);
+    expect(brief(rig.facts.slice(from))).toEqual([]);
+  });
+});
+
 describe('finding 4: a takeout called off with the same darts', () => {
   it('throwing(A) → (A,B) → takeout → called off → the board retracts B: B is withdrawn', async () => {
     const rig = await online();

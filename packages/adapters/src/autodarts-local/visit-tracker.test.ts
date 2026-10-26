@@ -341,7 +341,14 @@ describe('§6.4 resync and decision R', () => {
 
 describe('Wi-Fi blips: a takeout is inferred only when the board was away long enough for one', () => {
   const S = MIN_UNSEEN_VISIT_MS;
-  const nothingKnown = () => online();
+  /** Between visits: the last one was seen taken out, so the board's event is "Takeout finished". */
+  const nothingKnown = () => {
+    const t = online();
+    step(t, throwing(A));
+    step(t, takeoutStarted(A));
+    step(t, takeoutFinished());
+    return t;
+  };
   const nothingKnownInEmptyTakeout = () => {
     const t = online();
     step(t, takeoutStarted()); // a hand in front of the cameras, seen to start
@@ -378,10 +385,10 @@ describe('Wi-Fi blips: a takeout is inferred only when the board was away long e
   });
 
   it('a short outage leaves the visit as it was, so its later darts and takeout are plain live facts', () => {
-    const t = online();
+    const t = nothingKnown();
     expect(step(t, takeoutFinished(), 'resync', 1500)).toEqual([]);
     const key = t.state().visitKey;
-    expect(step(t, throwing(A))).toEqual(['detect 0:T20']);
+    expect(step(t, throwing(E))).toEqual(['detect 0:S12']);
     expect(t.state().visitKey).toBe(key);
   });
 
@@ -392,6 +399,73 @@ describe('Wi-Fi blips: a takeout is inferred only when the board was away long e
     const still = nothingKnownInEmptyTakeout();
     expect(step(still, takeoutStarted(), 'resync', 1000)).toEqual([]);
     expect(still.state().inTakeout).toBe(true);
+  });
+});
+
+describe('a visit ends even when nothing of it is known any more (e2e seeds 387, 1725, 1421, 1900, 267, 955)', () => {
+  // A whole board visit ended unseen, so the next visit carried on its visitKey and the turn
+  // order could shift.
+  const S = MIN_UNSEEN_VISIT_MS;
+  /** A visit whose only dart the board withdrew: nothing known, but the visit had darts. */
+  const emptied = (): VisitTracker => {
+    const t = online();
+    step(t, throwing(A));
+    expect(step(t, snap('Throw', 'Throw detected'))).toEqual(['withdraw']);
+    return t;
+  };
+
+  it('a manual reset of a visit whose darts were all withdrawn ends it', () => {
+    const t = emptied();
+    const key = t.state().visitKey;
+    expect(t.classifyFrame(manualReset())).toBe('confirm');
+    expect(step(t, manualReset())).toEqual(['reset']);
+    expect(t.state().visitKey).not.toBe(key);
+    expect(step(t, manualReset())).toEqual([]); // a repeat resets nothing
+  });
+
+  it.each([
+    ['its takeout', takeoutFinished()],
+    ['its reset', manualReset()],
+  ])('%s during a short outage ends it: the board’s event says so', (_label, s) => {
+    const t = emptied();
+    const key = t.state().visitKey;
+    expect(step(t, s, 'resync', S - 1)).toEqual(['takeout-end inferred']);
+    expect(t.state().visitKey).not.toBe(key);
+  });
+
+  it('its takeout seen live ends it', () => {
+    const t = emptied();
+    expect(step(t, takeoutStarted())).toEqual(['takeout-start']);
+    expect(step(t, takeoutFinished())).toEqual(['takeout-end']);
+  });
+
+  it('a crash keeps it: the rebuilt state knows the visit had darts', () => {
+    const t = online();
+    const facts: TrackerFact[] = [];
+    for (const s of [throwing(A), snap('Throw', 'Throw detected')]) facts.push(...t.apply(s, 'live'));
+    const restored = rebuildVisitState(facts, () => '01JBX00000000000000000000V');
+    expect(restored).toMatchObject({ known: [], allWithdrawn: true });
+    expect(restored.visitKey).toBe(t.state().visitKey);
+    expect(step(tracker(restored), manualReset())).toEqual(['reset']);
+  });
+
+  it.each([
+    // [what the board's event says after a short outage, nothing known, empty board, facts]
+    ['a reset', manualReset(), ['takeout-end inferred']],
+    ['darts thrown and withdrawn', snap('Throw', 'Throw detected'), ['takeout-end inferred']],
+    ['nothing new: the same event', takeoutFinished(), []],
+    ['nothing new: a board restart', snap('Throw', 'Started'), []],
+  ] as const)('between visits, a short outage, then %s', (_label, s, facts) => {
+    const t = online();
+    step(t, throwing(A));
+    step(t, takeoutStarted(A));
+    step(t, takeoutFinished());
+    expect(step(t, s, 'resync', S - 1)).toEqual(facts);
+  });
+
+  it('a takeout after a board restart, in a short outage: a takeout happened, inferred', () => {
+    const t = online(); // the board's event: "Started"
+    expect(step(t, takeoutFinished(), 'resync', S - 1)).toEqual(['takeout-end inferred']);
   });
 });
 
@@ -498,6 +572,19 @@ describe('crash-resume edges the log cannot show exactly: never fewer flags', ()
     // After a normal end, the board's status change says the takeout is over.
     log.push({ type: 'BoardStatusChanged', payload: { status: 'ready' } });
     expect(rebuildVisitState(log, ids).takeoutTail).toBeUndefined();
+  });
+
+  it('after a takeout seen to its end the board’s event is "Takeout finished", though its status is logged after it', () => {
+    const t = online();
+    const log: { type: string; payload: unknown }[] = [];
+    const status = (s: string) => ({ type: 'BoardStatusChanged', payload: { status: s } });
+    log.push(...t.apply(throwing(A), 'live'), status('throwing'));
+    log.push(...t.apply(takeoutStarted(A), 'live'), status('takeout'));
+    log.push(...t.apply(takeoutFinished(), 'live'), status('ready'));
+    const restored = rebuildVisitState(log, ids);
+    expect(restored.boardEvent).toBe('Takeout finished');
+    // A quick relaunch on the idle board: nothing happened, nothing inferred.
+    expect(step(tracker(restored), takeoutFinished(), 'resync', 1000)).toEqual([]);
   });
 
   it('a takeout called off with 3 darts logs nothing: the resumed tracker ends it on the next snapshot, flagging if darts went missing', () => {

@@ -70,6 +70,16 @@ export interface VisitState {
    * the empty board: that is not a new, empty takeout.
    */
   takeoutTail?: true;
+  /**
+   * The current visit had darts and the board withdrew them all: nothing of it is known, but its
+   * reset or takeout still ends it.
+   */
+  allWithdrawn?: true;
+  /**
+   * The board's `event` when it was last read: after an outage, a different one says what
+   * happened meanwhile. `rebuildVisitState` can only guess it from the last board fact.
+   */
+  boardEvent?: string;
 }
 
 export type TrackerFact =
@@ -115,6 +125,8 @@ export class VisitTracker {
    * same takeout, not a new, empty one.
    */
   private takeoutTail: boolean;
+  /** The current visit has had darts, even if the board withdrew them all since. */
+  private hadDarts: boolean;
 
   constructor(ids: IdSource, restored?: VisitState) {
     this.ids = ids;
@@ -128,6 +140,8 @@ export class VisitTracker {
         }
       : { visitKey: ids(), known: [], inTakeout: false, recentVisits: [] };
     this.takeoutTail = restored?.takeoutTail === true;
+    this.hadDarts = restored !== undefined && (restored.known.length > 0 || restored.allWithdrawn === true);
+    this.lastEvent = restored?.boardEvent;
   }
 
   /** A copy of the current visit state (for diagnostics and tests). */
@@ -139,6 +153,8 @@ export class VisitTracker {
       recentVisits: this.s.recentVisits.map((v) => v.map(copyDart)),
     };
     if (this.takeoutTail) s.takeoutTail = true;
+    if (this.hadDarts && this.s.known.length === 0) s.allWithdrawn = true;
+    if (this.lastEvent !== undefined) s.boardEvent = this.lastEvent;
     return s;
   }
 
@@ -156,7 +172,7 @@ export class VisitTracker {
     const K = this.s.known;
     const T = snap.throws;
     if (!this.observed) return 'confirm';
-    if (snap.event === 'Manual reset' && (K.length > 0 || this.s.inTakeout)) return 'confirm';
+    if (snap.event === 'Manual reset' && (K.length > 0 || this.s.inTakeout || this.hadDarts)) return 'confirm';
     if (T.length === 0) {
       if (this.s.inTakeout) return 'apply';
       if (K.length === 0) return this.missedTakeout(snap) ? 'confirm' : 'apply';
@@ -192,7 +208,7 @@ export class VisitTracker {
 
   private applyLive(snap: Snapshot, out: TrackerFact[]): void {
     const T = snap.throws;
-    if (snap.event === 'Manual reset' && (this.s.known.length > 0 || this.s.inTakeout)) {
+    if (snap.event === 'Manual reset' && (this.s.known.length > 0 || this.s.inTakeout || this.hadDarts)) {
       out.push({ type: 'VisitReset', payload: { visitKey: this.s.visitKey, reason: 'manual-reset' } });
       this.withdrawFrom(out, 0);
       this.newVisit();
@@ -269,9 +285,9 @@ export class VisitTracker {
       // Known darts are gone: a takeout may have happened while we were away.
       this.finishTakeout(out, true);
     } else if (T.length === 0) {
-      // Nothing was on the board and nothing is: a whole visit may have come and gone, but
-      // only if we were away long enough for one.
-      if (wholeVisitFits) this.finishTakeout(out, true);
+      // Nothing was on the board and nothing is: a whole visit may have come and gone, if we were
+      // away long enough for one, or if the board's own event says one ended meanwhile.
+      if (wholeVisitFits || this.boardMovedOn(snap)) this.finishTakeout(out, true);
       else this.endEmptyTakeout(snap);
     } else if (K.length === 0) {
       // Nothing known proves the visit went on: a whole visit may have come and gone, unless we
@@ -510,6 +526,24 @@ export class VisitTracker {
   }
 
   /**
+   * A resync of an empty board, nothing known: the board's `event` (the last thing that happened
+   * to it) changed while we were away to one that ends a visit, or to "Throw detected" with no
+   * darts listed (darts thrown and withdrawn). Darts do not only leave by a takeout, so this is
+   * evidence that a visit boundary may have passed, however short the outage. The end of an
+   * empty takeout we saw start is not. A visit that had darts, all withdrawn, is still open, so
+   * a board showing a reset or a finished takeout ended it, whatever its event was before.
+   */
+  private boardMovedOn(snap: Snapshot): boolean {
+    const e = snap.event;
+    if (e === undefined) return false;
+    const ends = e === 'Manual reset' || e === 'Takeout finished';
+    if (this.hadDarts && ends) return true;
+    if (this.lastEvent === undefined || e === this.lastEvent) return false;
+    if (e === 'Takeout finished') return !this.s.inTakeout;
+    return ends || e === 'Throw detected';
+  }
+
+  /**
    * After a short outage on an empty visit: a takeout of the empty board we saw start (a hand
    * in front of the cameras, a stuck takeout) is over if the board no longer shows one. It
    * removed no darts, so it ends nothing.
@@ -546,6 +580,7 @@ export class VisitTracker {
     this.s.inTakeout = false;
     this.blindTakeout = false;
     this.takeoutTail = false;
+    this.hadDarts = false;
   }
 
   /** Leading darts that are exactly the darts of the last ended visit. */
@@ -610,6 +645,7 @@ export class VisitTracker {
     if (t.coords) known.coords = t.coords;
     if (ghost) known.suspectedGhost = true;
     this.s.known.push(known);
+    this.hadDarts = true;
   }
 
   /**
