@@ -1,6 +1,6 @@
 # AutoDarts Arcade — Technical Risk Register (initial, Phase 0)
 
-> **Last reviewed:** 2026-10-26, at the Phase 2/3 integration: R02 and R10 updated, R23 re-scored for owner decision V and the public repository, R28 added. Earlier that day, re-scored after the owner confirmed:
+> **Last reviewed:** 2026-10-26, after the engine, boundary and board fixes were merged and reconciled: R10, R14, R17 and R28 updated (R28 now mitigated in simulation), R29 and R30 added. Before that, at the Phase 2/3 integration: R02 and R10 updated, R23 re-scored for owner decision V and the public repository, R28 added. Earlier that day, re-scored after the owner confirmed:
 > - **private home use**, with permission from Autodarts staff (owner-attested);
 > - a **Fire TV Stick 4K Max** as the TV;
 > - **TestFlight** on a paid Apple Developer account for iOS;
@@ -31,7 +31,8 @@
 | R17 | Board API key / TLS key exposed via `/api/config` and `/api/system` | Security | 🟡 | 2 | 4 | 8 Med | P2 | Open |
 | R15 | Android cleartext rules / Android 17 local-network permission | Platform | ✅ | 2 | 3 | 6 Low | P1 | Open |
 | R27 | Fire OS sideload friction (iOS resolved: TestFlight on a paid account) | Distribution | ✅/🟡 | 2 | 3 | 6 Low | HC1 / P6 | Open |
-| R28 | A failed log append leaves the adapter ahead of the log | Data | ✅ sim / ⚪ | 2 | 3 | 6 Low | P6 | Open (known issue, no recovery yet) |
+| R30 | Board-API limits and adapter gaps left after the fixes; heartbeats on a silently dead socket | Integration | **sim** / ⚪ | 2 | 3 | 6 Low | HC1 / P6 | Open (documented; flags where it can) |
+| R28 | A failed log append leaves the adapter ahead of the log | Data | ✅ sim / ⚪ | 2 | 3 | 6 Low | P4 / P6 | **Mitigated in sim**; W3 notice and a store that appends but reports failure still open |
 | R03 | Autodarts ToS: third-party / commercial use | Legal | ✅ + owner-attested | 1 | 5 | 5 Low | P0 | **Mitigated:** private use, staff permission |
 | R04 | Fire TV fragmentation (Vega sticks can't run the Android build) | Platform | ✅ | 1 | 4 | 4 Low | — | **Resolved for current hardware** |
 | R20 | Clock skew corrupts ordering | Data | ⚪ | 2 | 2 | 4 Low | P2 | Mitigated by design |
@@ -39,6 +40,7 @@
 | R24 | Player personal data (names, stats, avatars) | Privacy | ⚪ | 2 | 2 | 4 Low | P4 | Mitigated by design |
 | R25 | Companion pairing friction | Product | ⚪ | 2 | 2 | 4 Low | P6 | Open |
 | R05 | Vega LAN capabilities unknown | Platform | ⚪ | 3 | 1 | 3 Low | backlog | Deferred |
+| R29 | Native stacks follow redirects before the app sees them | Security | 🟡 / ⚪ | 1 | 3 | 3 Low | HC1 | Open (residual; refused after the fact) |
 | R07 | GPL-3.0 vs app-store distribution | Legal | ✅ | 1 | 2 | 2 Low | backlog | N/A for private installs |
 | R08 | Trademark: "AutoDarts" in app name | Legal | ✅ | 1 | 2 | 2 Low | backlog | N/A for private installs |
 | R19 | App Review rejects a hardware-dependent app | Release | ✅ | 1 | 1 | 1 Low | backlog | N/A for private installs |
@@ -76,19 +78,20 @@
 - **Cause:** No throw IDs or sequence numbers, a silent socket, and takeouts that may happen while offline 🟡[C3].
 - **Impact:** Wrong scores, or double-counted darts.
 - **Mitigation:**
-  - Snapshot diff with `(visitKey, index)` idempotency.
+  - Snapshot diff with each dart's identity by coordinates, so a re-delivered snapshot adds nothing and a withdrawal hits the dart that went. Without coordinates, a guessed match is flagged (ARCHITECTURE §6.1).
   - Liveness polling.
-  - Resync with inferred takeouts (ARCHITECTURE §6.4).
+  - Resync with inferred takeouts (ARCHITECTURE §6.4). A whole visit takes at least 3 s, and every outage is measured from at least 1 s before the connection ended, a crash included (§6.5).
   - Reconciliation (owner decision R):
     - darts recovered within the same visit are scored as `recovered`, and the turn is flagged `needsReview` without a pause;
     - an inferred takeout ends the turn `needsReview`, pads no misses, and pauses the game until a person confirms the turn (`ConfirmTurn` → `TurnReviewed`);
     - a session can't close as completed while a flagged turn is unconfirmed.
   - P2 chaos suite: 1,000 runs, zero silent mismatches, and a review pause after every inferred takeout.
 - **Status (2026-10-26):** built, and proven in simulation **sim**.
-  - The adapter chaos suite: 1,000 seeded runs, board model → faults → adapter.
-  - The end-to-end chaos suite, through adapter, runtime and host playing real games: 1,000 Countdown runs with faults, 40 runs of each other game, 200 clean runs that flag nothing, and 400 crash-resumes. Zero silent mismatches.
+  - The adapter chaos suite: 1,000 seeded runs, board model → faults → adapter, with darts pulled one at a time, takeouts called off, darts without coordinates and 3 s visits; its oracle also checks that each physical dart keeps one identity. 200 clean runs flag nothing. 5,000 more seeds: no violation.
+  - The end-to-end chaos suite, through adapter, runtime and host playing real games: 1,000 Countdown runs mixing faults, the board's odd ways, a player correcting darts, a failing store and crashes; 40 runs of each other game; 200 clean runs that flag only visits the board withdrew; 150 failing-store runs; and 600 crash-resumes. Its oracle checks who threw each visit and which dart each id is. Zero silent mismatches, and 5,000 more mixed seeds find none.
+  - The price is flags: about half the turns of the mixed runs are flagged (0.52), against 1.7 % of clean runs, all of them visits whose darts the board withdrew.
   - A dart where the previous visit's dart was is now counted pending review, not dropped as a ghost. A sweep of 8,000 more seeds of each suite finds no violation; before the fix it found one (seed 7489).
-  - Real-board evidence waits for HC1: golden replay of real captures and the on-device reconnect tests.
+  - What is left is in R30. Real-board evidence waits for HC1: golden replay of real captures and the on-device reconnect tests.
 - **Early warning:** Chaos-suite failures; `needsReview` frequency at home.
 - **Owner:** Lead.
 
@@ -157,6 +160,7 @@
   - Deep link to Settings.
   - `NSLocalNetworkUsageDescription`, `NSAllowsLocalNetworking` and `NSBonjourServices`.
   - Tested on device in HC1.
+- **Address rule (2026-10-26):** the app talks only to canonical IP literals on the home network (ARCHITECTURE §9.4). Names, `.local` included, are refused until mDNS exists, because Fire OS has no mDNS resolver and DNS could answer with a public address. A saved address that fails the rule is discarded. Residual: until mDNS lands, everyone types the board's IP address, and a board whose address changes (no DHCP reservation) must be found again with the scan.
 - **Owner:** Lead.
 
 ### R16 · App suspension drops the socket — 9 Medium
@@ -215,7 +219,12 @@
 
 ### R17 · Board secrets exposure — 8 Medium
 - **Cause:** `/api/config` and `/api/system` return the board API key and TLS key 🟡[C2].
-- **Mitigation:** A transport endpoint allowlist enforced by a build-failing test. Diagnostics contain only allowlisted data. No Autodarts credentials are ever handled.
+- **Mitigation:**
+  - A transport endpoint allowlist enforced by a build-failing test.
+  - Every URL is built from the canonical host and checked again before each request and socket, so a leading-zero or odd-form address can't reach another host.
+  - Redirects are refused: `redirect: 'error'`, and a response that was redirected, is a 3xx or comes from another URL is refused before its body is read. Bodies are capped while they are read.
+  - Diagnostics contain only allowlisted data, and secret values are redacted whole wherever diagnostics can carry text (ARCHITECTURE §9.5). No Autodarts credentials are ever handled.
+- **Residual:** a native stack that follows a redirect itself has already sent that request, and a WebSocket upgrade's redirect can't be seen at all (R29). Nothing the app sends is secret, and what comes back is refused.
 - **Owner:** Lead.
 
 ### R15 · Android cleartext / local-network permission — 6 Low
@@ -224,15 +233,25 @@
 - **Owner:** Lead.
 
 ### R28 · A failed log append leaves the adapter ahead of the log — 6 Low
-- **Cause:** The host writes ahead. If `LogStore.append` fails, it records nothing and its state stays as it was. But the adapter has already moved on: it counts the dart, or the takeout, as sent and won't send it again. `createArcadeRuntime` reports the failure only through `onError`. ✅ **sim** (`arcade-runtime.test.ts` pins this)
+- **Cause:** The host writes ahead. If `LogStore.append` fails, it records nothing and its state stays as it was. But the adapter has already moved on: it counts the dart, or the takeout, as sent and won't send it again. `createArcadeRuntime` used to report the failure only through `onError` ✅ **sim**.
 - **Impact:** Play goes on with a dart that no turn holds, or a takeout that ended no turn, and nothing is flagged. A full or failing device disk is the likely trigger ⚪.
-- **Today:** No automatic recovery. Only a crash-resume notices: rebuilt from the log, the adapter can't place what was lost, so it infers a takeout. The turn is flagged, play pauses for review, and the board's darts are held as `recovered` ✅ **sim**. Flagged, not silent, but clumsy.
-- **Mitigation plan (Phase 6 hardening):**
-  - Retry the append a few times, with backoff, before giving up.
-  - If it still fails, do what a crash-resume does, at once: stop the source, rebuild its visit state from the persisted log (`rebuildVisitState`, `restore()`) and resync. What was lost then comes back flagged.
-  - Show the failure in W3, not only in `onError`.
-  - Add a failing `LogStore` to the end-to-end chaos suite, with zero silent mismatches as the bar.
-- **Early warning:** `onError` reports carrying an `error` (a thrown append), not a `rejected` result.
+- **Status (2026-10-26): mitigated in simulation** **sim**. `createArcadeRuntime` retries the append once. If that fails too, it rebuilds the adapter's visit state from the log (`rebuildVisitState`, `restore()`) and resyncs, measuring the outage from the last contact before the lost fact. What was lost comes back recovered, or as an inferred takeout, and its turn is flagged. While the storage keeps failing, the rebuilds wait 1, 2, 5, then 10 s. Each problem goes to `onError` with the recovery taken, and the default logs it with `console.error` (ARCHITECTURE §6.5). The end-to-end suite has a failing store in 150 runs of its own and a fifth of the mixed runs: every dart present, or recovered and flagged, with zero silent mismatches.
+- **Still open:**
+  - Show the failure in W3, not only in `onError` (P4 / P6).
+  - A store that writes the batch but reports a failure. The host then stays behind its own log, so every later append is refused (its seq is taken) and play stalls until a restart, which loads the log as stored ⚪ (from the code; not in the suite).
+- **Early warning:** `onError` reports carrying an `error` (a thrown append) and a `recovery`, not a `rejected` result.
+- **Owner:** Lead.
+
+### R30 · Board-API limits and adapter gaps left after the fixes — 6 Low
+- **Cause:** some things the board's local API can't show, and some the adapter covers only by flagging more (ARCHITECTURE §6.4, §6.5) **sim**:
+  - **A visit the app saw none of, whose record the board emptied.** The board withdrew every dart, or was reset, inside an outage shorter than a whole visit. The resync then shows an empty board, or an empty takeout under way, exactly as for a hand in front of the cameras. The waiting turn runs on into the next visit, unflagged. The end-to-end oracle leaves such visits out of the rotation and counts them: 68 in 1,000 mixed runs.
+  - **Heartbeats on a socket that died without closing.** A quiet open socket counts as contact until the adapter notices, which takes up to the 5 s liveness wait and its polls. An outage that starts then measures up to that much short, and so does a crash-resume that uses the stored contact.
+  - **A 3-dart call-off logs nothing** (the status stays "Takeout"). After a crash, the resumed tracker may flag darts it need not; never fewer.
+  - **Flags without timing.** A takeout first seen after any outage, with room in the visit for another dart, flags every dart, and darts without coordinates are flagged after any outage. Safe, but more reviews than strictly needed.
+  - **A takeout seen to start, called off, another dart thrown and pulled, all inside one outage** with the takeout showing again at the resync: nothing flags the missing dart. The simulator never plays this.
+- **Impact:** a rare silent misattribution of one visit (the first two), or more review work (the others).
+- **Mitigation:** HC1 checks how the board reports withdrawals, resets, call-offs and pulls one at a time, and whether a dart's coordinates appear in every frame (ARCHITECTURE §4.3). A board version that adds ids or sequence numbers would close most of this.
+- **Early warning:** in-house review counts; a session that ends with a player a visit ahead.
 - **Owner:** Lead.
 
 ### R03 · Autodarts ToS: third-party and commercial use — 5 Low (mitigated)
@@ -267,6 +286,12 @@
 
 ### R25 · Companion pairing friction — 4 Low
 - **Mitigation:** The companion is optional. Pairing is a QR code with a one-time token. The TV remote covers every flow on its own.
+- **Owner:** Lead.
+
+### R29 · Native stacks follow redirects before the app sees them — 3 Low
+- **Cause:** React Native's own fetch ignores `redirect: 'error'`, and its iOS and Android stacks follow redirects themselves. On Android and Fire OS the WebSocket upgrade follows redirects inside the native stack too 🟡 (transport review; on-device check in HC1 🔬).
+- **Impact:** a request to an allowlisted board path can reach whatever the redirect names before the app sees it. Nothing the app sends is secret, and the answer is refused unread (R17). A WebSocket that was redirected can't be told apart at all.
+- **Mitigation:** the app keeps Expo's own fetch (`expo/fetch`), which honours `redirect: 'error'`, and never sets `EXPO_PUBLIC_USE_RN_FETCH`. Every response is checked for a redirect before its body is read, and its request aborted. Only canonical private IP literals are ever addressed (ARCHITECTURE §9.3–§9.5).
 - **Owner:** Lead.
 
 ### R05 · Vega LAN capabilities unknown — 3 Low (deferred)

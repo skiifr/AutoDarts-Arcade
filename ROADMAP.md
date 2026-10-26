@@ -1,6 +1,6 @@
 # AutoDarts Arcade — Roadmap
 
-> **Companion documents:** [ARCHITECTURE.md](ARCHITECTURE.md) (design and evidence) · [RISK-REGISTER.md](RISK-REGISTER.md) (risks R01–R28).
+> **Companion documents:** [ARCHITECTURE.md](ARCHITECTURE.md) (design and evidence) · [RISK-REGISTER.md](RISK-REGISTER.md) (risks R01–R30).
 > Phase 0 is complete when these three documents are accepted. Phases 1–6 below, with hardware checkpoint HC1, are the implementation roadmap. **No code or deployment happens until Phase 1 is approved.**
 
 ---
@@ -124,7 +124,10 @@ Phase 1 used to include the hardware work as well. The owner can't reach the boa
   - off-board misses and bounce-outs;
   - a dart that falls out mid-visit;
   - takeout with 0, 1, 2 and 3 darts;
-  - a hand in front of the cameras;
+  - darts pulled one at a time, watching the `event` field as they come out;
+  - a hand in front of the cameras, and one that starts a takeout and leaves the darts in (a call-off);
+  - whether each dart's `coords` appear in every frame or in none, a bounce-out included;
+  - the quickest one-dart visit, timed from the throw to the dart out (the 3 s rule, ARCHITECTURE §6.4);
   - manual reset;
   - Wi-Fi drop on the display side;
   - board-host reboot;
@@ -162,10 +165,13 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
 
 **Status (2026-10-26):** built, and proven in simulation (**sim**: the simulator, the fake board and virtual time, not hardware).
 - **Proven in simulation:**
-  - the end-to-end chaos suite: 1,000 seeded Countdown runs with faults through adapter, runtime and host, plus 40 runs each of the other games, with zero silent mismatches and a review pause after every inferred takeout; 200 clean-network runs flag nothing;
+  - the adapter chaos suite: 1,000 seeded runs with the board's odd ways (darts pulled one at a time, takeouts called off, darts without coordinates, 3 s visits) and a check that each physical dart keeps one identity; 200 clean runs flag nothing; 5,000 more seeds find no violation;
+  - the end-to-end chaos suite: 1,000 seeded Countdown runs through adapter, runtime and host, mixing network faults, the board's odd ways, a player correcting darts, a failing store and crashes, plus 40 runs each of the other games. Zero silent mismatches, with an oracle that checks who threw each visit and which dart each id is, and a review pause after every inferred takeout. 5,000 more mixed seeds find none;
+  - flags: about half the turns of the mixed runs are flagged (0.52); 200 clean-network runs flag only the 1.7 % of turns whose darts the board withdrew;
   - resync within 2 s of the board becoming reachable, on the virtual scheduler (worst case 0.81 s when attempts fail fast, 1.59 s when they hang);
   - idle load, and the build-failing allowlist test;
-  - crash-resume to the exact state: 200 runs dropped at a random quiet moment and resumed from the store.
+  - crash-resume to the exact state: 200 runs dropped at a random quiet moment and resumed from the store, and 200 dropped during a long idle stretch and relaunched within 1.5 s (1,000 more seeds too, the longest outage measured 2.77 s against the 3 s threshold);
+  - a failing log store: 150 runs whose store refuses appends, every dart present or recovered and flagged (RISK-REGISTER R28).
 - **Done:** the dart ticker, against the fake board in a browser.
 - **Open until HC1:** golden replay of real captures, the ticker on devices, the resume time on the Fire TV, and the on-device reconnect tests.
 
@@ -250,6 +256,11 @@ Both moved forward from Phase 5, so the shell is built on an approved look rathe
   - the dartboard picker (SVG);
   - theme and player colours (colour-blind-safe palette).
 - Correction flow with **dry-run preview**; provisional results; "needs review" banners and the review pause with **Confirm turn**.
+- A **"Who's up next?"** choice on the review screen, so a person can fix the rotation after an outage: it may have hidden any number of visits, and the turn after a review pause is a guess (ARCHITECTURE §6.4).
+- Wire the screens to the engine through `createArcadeRuntime`, replacing the shell's throwaway demo driver. That includes the W4 preview, the W5 score label for Countdown (a remaining score, not points), and passing all of W2's options to `StartSession`.
+- The app provides:
+  - a key-value `ContactStore` (its key-value storage), or a resume after a quiet spell pauses for review (ARCHITECTURE §6.5);
+  - the SQLite log store with `expoSqliteExecutor(db, { exclusive: Platform.OS !== 'web' })`, since expo-sqlite refuses exclusive transactions on web (ARCHITECTURE §9.3).
 - Player profiles (local), guests, settings (quality tier, house rules).
 - Basic audio through `AudioPort`; keep-awake; Home → pause on TV.
 - **Demo mode** (simulator), for development and for trying games without the board.
@@ -346,7 +357,7 @@ The causes of a breach matter:
 
 **Scope**
 - **Phone companion** (optional): a LAN server in the host app (4K Max or iPad), QR pairing with a one-time token, and commands for name entry, corrections and operator actions.
-- **Soak and resilience:** 4-hour simulated sessions with periodic board and Wi-Fi drops. Recovery from a failed log append (R28).
+- **Soak and resilience:** 4-hour simulated sessions with periodic board and Wi-Fi drops. A failed log append is already recovered in simulation; what is left of R28 is a W3 notice of it, and a store that writes a batch but reports a failure.
 - **Home release:** final private builds on every household device. TestFlight builds expire after 90 days 🟡[P27], so a fresh build is uploaded at least every 90 days. EAS Build + Submit can automate this ⚪.
 - User documentation: setup, troubleshooting, and the "your board updated and something broke" playbook.
 

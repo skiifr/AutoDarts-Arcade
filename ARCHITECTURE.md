@@ -197,6 +197,9 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 | **Misses come in two shapes:** `{"name":"M12","bed":"Outside","multiplier":0,"number":12}` (real 2.0.2 capture), and `{"name":"M","number":0,"multiplier":0}` | [C3][C2] |
 | **Inner bull:** `{"name":"Bull","number":25,"bed":"Double","multiplier":2}`. Cloud types also use `DoubleBull` | [C2][C6] |
 | `coords` are bull-centred, with r = 1.0 at the outer double wire. Values up to ~3.0 occur off-board. Bounce-outs may carry no coords | [C3][C5] |
+| The adapter assumes a dart's `coords` appear in every frame or in none (§6.1). Unconfirmed: **HC1 checks** it 🔬 | ⚪ |
+| A takeout called off (a hand that left the darts in): the status returns to `Throw` (`Takeout` with 3 darts) and the event may stay at `Takeout started`. Unconfirmed: **HC1 records** what a call-off frame looks like 🔬 | ⚪ |
+| Darts pulled one at a time: the list shrinks dart by dart while the status stays `Takeout in progress`, and may still show it once the last dart is out. Unconfirmed: **HC1 records** how the `event` field behaves meanwhile 🔬 | ⚪ |
 | A `bouncer` field exists, but `true` has never been observed | [C3] |
 | The socket is **silent when nothing changes**. There is no heartbeat | [C3] |
 | The board can **withdraw** a detection outside a takeout | [C2] |
@@ -410,25 +413,37 @@ The board emits **snapshots without IDs** 🟡[C3]. We reconstruct a reliable da
 
 **Adapter state:**
 - `visitKey`: a ULID minted at each new visit.
-- `known[]`: the darts seen in this visit, each with its own `throwId`.
-- `inTakeout`.
+- `known[]`: the darts seen in this visit, in board order, each with its own `throwId` and `indexInVisit`. A new dart takes the lowest free index.
+- `inTakeout`: whether a takeout is running. The board's status decides ("Takeout in progress"); the event counts only when the status is missing or unknown.
+
+**Dart identity is by coordinates.** Each listed dart is matched to a known dart by where it sits, not by its place in the list. It is the known dart in the same place (within 0.3 mm), or nearly the same place (within 8.5 mm) when the board re-read it. So when the board withdraws a dart that isn't the last one, that dart is withdrawn and the others keep their ids **sim**. Real 2.0.2 frames carry coordinates 🟡[C3]. Without them, the match goes by order and segment. When that is a guess, the darts left are flagged `pendingReview` instead of being re-mapped: the board removed a dart that wasn't the last one, two alike darts leave the choice open, several darts changed at once, or an outage came between. A dart without coordinates is never taken for one that has them.
 
 ### 6.2 Snapshot diff (every `state` frame, and every `GET /api/state`)
 
 ```
 throws := data.throws ?? []                 // v2 omits the key on an empty board
-if data.event == "Manual reset":            emit VisitReset; withdraw all known; new visitKey
-elif takeout begins (event "Takeout started" | status "Takeout in progress") and !inTakeout:
-                                            emit TakeoutStarted; inTakeout = true
-elif (event "Takeout finished") or (inTakeout and throws empty):
-                                            emit TakeoutFinished; known = []; new visitKey; inTakeout = false
-for i in 0..max(len(throws), len(known))-1:
-  i <  len(known) and i <  len(throws) and seg differs → emit DartUpdated(known[i].throwId)
-  i >= len(known)                                      → emit DartDetected(new ULID, indexInVisit=i)
-  i >= len(throws) and !inTakeout                      → emit DartWithdrawn(known[i].throwId)   // board retracted it
+takeout := status == "Takeout in progress"  // the event only if the status is missing or unknown
+if data.event == "Manual reset" and the visit had darts (or a takeout):
+                                            emit VisitReset; withdraw all known; new visitKey
+match throws to known[] by identity (§6.1)
+if inTakeout:
+  !takeout (status back to throwing)        → the takeout was called off: inTakeout = false;
+                                              known darts not listed → DartWithdrawn; the rest flagged
+  known darts not listed                    → pulled out: nothing. The last one out ends the visit:
+                                              emit TakeoutFinished; new visitKey
+elif takeout:                               emit TakeoutStarted; inTakeout = true
+                                            // known darts already gone are kept, flagged
+elif event "Takeout finished" for a takeout we never saw start:
+                                            emit TakeoutFinished{inferred}; new visitKey
+else, for each dart:
+  known, not listed                         → emit DartWithdrawn(its throwId)    // board retracted it
+  known, listed, segment differs            → emit DartUpdated(its throwId)      // board re-read it
+  listed, not known                         → emit DartDetected(new ULID, lowest free indexInVisit)
 ```
 
-- **Idempotency:** `(visitKey, indexInVisit)` is the dedupe key. Re-delivered or duplicate snapshots produce no new events.
+- **Idempotency:** each listed dart is matched to a known dart by identity, so a re-delivered or duplicate snapshot matches every dart and adds nothing. `(visitKey, indexInVisit)` is no longer the dedupe key.
+- A frame that would withdraw, change or replace known darts, or call a takeout off, is confirmed with `GET /api/state` first. So a late or duplicated frame can never withdraw a dart or call a takeout off.
+- After the last dart is pulled, the board may still show the takeout on the empty board. That is the end of the same takeout, not a new empty one, and the board's own "Takeout finished" adds nothing.
 - **Segment normalization** (§7.3) runs before comparison, so `M` and `M12` style misses compare consistently.
 
 ### 6.3 Per-situation handling
@@ -438,12 +453,15 @@ for i in 0..max(len(throws), len(known))-1:
 | **Normal dart** | `DartDetected` → host emits `DartThrown` for the current player, with `dartIndex = indexInVisit`. |
 | **Miss** (on-board outside the doubles, or off-board) | Normalized to `bed: "miss"`, `points: 0`. Keeps `missSector` when given (`M12`), which is useful for "near-miss" effects and stats. |
 | **Bounce-out or fallen dart** (usually *not* detected) | At an **observed** `TakeoutFinished` with fewer than 3 darts, the house rule `missingDartsAreMisses` (default **on**) appends `DartAdded{reason:'undetected'}` as misses. Players can relabel one as "bounce-out" in W4. An inferred takeout is never padded (§6.4). |
-| **Board changes its mind** (`DartUpdated` / `DartWithdrawn`) | Host appends `DartCorrected{reason:'source-update'}` / `DartVoided{reason:'source-withdrawn'}`, then replays. The UI shows a subtle "adjusted" chip. |
-| **User correction** | W4 sends commands: `CorrectDart` / `VoidDart` / `AddDart`. Host appends the event and replays. Any dart in the session is correctable, including after "game over" (results stay *provisional* until the next action). |
-| **Takeout** | `TakeoutFinished` ends the turn. On the 3rd dart (board status `Takeout`) the UI already shows "Remove darts". |
+| **Board changes its mind** (`DartUpdated` / `DartWithdrawn`) | Host appends `DartCorrected{reason:'source-update'}` / `DartVoided{reason:'source-withdrawn'}`, then replays. The UI shows a subtle "adjusted" chip. A `DartUpdated` with the segment unchanged only flags the dart (§7.4). |
+| **User correction** | W4 sends commands: `CorrectDart` / `VoidDart` / `AddDart`. Host appends the event and replays. Any dart in the session is correctable, including after "game over" (results stay *provisional* until the next action). The person wins over a later change of mind by the board. But when the board contradicts them, its turn is flagged when it ends: an update of a dart they voided, an update of a corrected dart to another segment, or a withdrawal of a corrected dart. The board's ids could have moved to another physical dart. A board that agrees, a withdrawal of a dart they voided, or a reset flags nothing. |
+| **Takeout** | `TakeoutFinished` ends the turn. On the 3rd dart (board status `Takeout`) the UI already shows "Remove darts". A visit whose darts were all voided still ends its turn at its takeout (padded as usual) or reset. If nothing of the turn is left live and the board withdrew a dart, the turn is flagged: that it was a real visit is the board's word alone. |
+| **Darts pulled one at a time** | Darts missing during a takeout are being removed, not withdrawn: nothing is emitted. The last dart out ends the visit (`TakeoutFinished`), even while the board still shows the takeout. A takeout first seen with darts already gone keeps them, flagged `pendingReview`: they may have been withdrawn before it began **sim**. |
+| **Takeout called off** (a hand in front of the cameras that left the darts in) | The board's status returns to throwing (`Takeout` with 3 darts), and the event may stay at "Takeout started". The takeout ends and the visit goes on, so a later withdrawal is a withdrawal again. Darts the call-off dropped are withdrawn, and the rest flagged `pendingReview`: some may have been pulled first. The call-off frame is confirmed with a state read first **sim**. |
+| **Darts without coordinates** (bounce-outs may carry none 🟡[C3]) | Matched by order and segment, never to a dart that has coordinates. When the match is a guess (§6.1), the darts left are flagged `pendingReview`. After an outage they always are: the board may have withdrawn one and the player thrown another on the same segment **sim**. |
 | **Uncertain history after a reconnect** (owner decision R) | Same-visit darts are scored as `recovered` and the turn is flagged `needsReview`, with no pause. A takeout that may have happened offline (`TakeoutFinished{inferred:true}`) ends the turn `needsReview`, pads nothing and pauses the game until a person confirms the turn. Details in §6.4. |
-| **A dart the adapter is unsure of** | A segment it can't read, or a dart where the previous visit's dart was (§7.4). It comes with `pendingReview: true`: scored, and the turn is flagged `needsReview` when it ends, with no pause. |
-| **Takeout with 0 darts** (hand in front of the cameras) | Ignored by default. A setting can make it count as "skip turn". |
+| **A dart the adapter is unsure of** | A segment it can't read, a dart where the previous visit's dart was, or a dart whose identity is in doubt (§6.1, §6.4, §7.4). It comes with `pendingReview: true`: scored, and the turn is flagged `needsReview` when it ends, with no pause. |
+| **Takeout with 0 darts** (hand in front of the cameras: a visit that never had a dart) | Ignored by default. A setting can make it count as "skip turn". A visit whose darts were all withdrawn or voided is not one (see Takeout). |
 | **Stuck takeout** (2.0.2 bug 🟡[C12]) | `Takeout in progress` with no darts for > 8 s → `BoardStatusChanged{status:'stuck-takeout'}` and a banner telling the player to reset the board from Autodarts' own app, with *Enter manually* as the way to keep playing. Arcade never sends a reset itself: it never writes to the board (owner decision S). |
 | **Darts already on the board at game start** | They are treated as baseline, not scored. The UI says "Clear the board to start". `StartSession` records the board as it is: its last `SourceConnectionChanged` and `BoardStatusChanged`, then these darts. So the session knows from its first event whether the board is online. |
 | **Autodarts corrections in its own web UI** | Not applicable: Arcade sessions are not Autodarts matches. Don't run an Autodarts match at the same time (R26). |
@@ -462,7 +480,9 @@ for i in 0..max(len(throws), len(known))-1:
 
 **Liveness.** The socket is silent when idle 🟡, so the adapter polls `GET /api/state` after 5 s without a `state` frame. Two failed polls → `OFFLINE`. Each poll result is also diffed, which makes the stream **self-healing** if a frame was ever missed. Only `state` frames hold off the poll. Other frame types (`motion_state`, stats) show the socket is alive but say nothing about the darts, and when frames were lost they could hide a whole visit from the self-healing read **sim**.
 
-**Watchdog.** No request can hang the adapter. Every `GET` is bounded by the transport's timeout and, should the transport never settle it, by a watchdog 1 s later (`REQUEST_WATCHDOG_SLACK_MS`). An abandoned request fails its connection attempt, which is retried, or counts as a failed poll. A socket that never fires open, close or error is abandoned after the 1 s connect timeout, and a stale socket's late close is ignored **sim**.
+**Watchdog.** No request can hang the adapter. Every `GET` is bounded by the transport's timeout and, should the transport never settle it, by a watchdog 1 s later (`REQUEST_WATCHDOG_SLACK_MS`). An abandoned request fails its connection attempt, which is retried, or counts as a failed poll. A socket that never fires open, close or error is abandoned after the 1 s connect timeout, and a stale socket's late close is ignored. A resync not finished within its read's timeout plus 1 s is abandoned and retried. While the resync's read is out, at most 64 frames are kept (`MAX_BUFFERED_FRAMES`); the oldest go first, since the read and the newest frames hold the latest state **sim**.
+
+**Hostile input.** A malformed throw, or any unexpected error while parsing a frame, a poll or the resync read, never wedges the adapter. It becomes a `SourceAnomaly` and the adapter carries on: an unreadable frame asks for a state read instead, and a poll re-arms liveness whatever it held. A segment it can't read is a miss pending review (§7.3) **sim** (fuzzed with hostile values).
 
 **Listener errors.** A listener that throws never unwinds the adapter. Its error goes to `onListenerError`, and every retry is armed before anyone hears of a failure, so a throwing screen can't stop the reconnect loop or leave a resync half done **sim**. The default reports the error as uncaught, later, which can be fatal in a React Native release build. So the app's board link passes a handler that logs it (`console.warn`, naming the board), and `connectBoard` gives the same handler to the health sampler. `ArcadeRuntime` and `SessionHost` still report their own listeners' errors as uncaught. The app doesn't create either yet, so wiring them waits until it does.
 
@@ -470,13 +490,21 @@ for i in 0..max(len(throws), len(known))-1:
 
 | Snapshot vs `known[]` | Interpretation | Adapter emits | Host does |
 |---|---|---|---|
-| Same prefix, maybe more darts | Same visit | Only the new darts, flagged `recovered: true` | Scores them as `DartThrown{origin:'recovered'}`. The turn goes on, and its `TurnEnded` carries `needsReview: true`. **No pause** |
+| Same prefix, maybe more darts | Same visit | Only the new darts, flagged `recovered: true`. Known darts without coordinates are flagged `pendingReview` too (§6.3) | Scores them as `DartThrown{origin:'recovered'}`. The turn goes on, and its `TurnEnded` carries `needsReview: true`. **No pause** |
 | Empty (while `known[]` had darts) | A takeout may have happened offline | `TakeoutFinished{inferred:true}` | **Review pause** (below) |
 | Different prefix | A visit boundary may have happened offline | `TakeoutFinished{inferred:true}`, then the new darts as `recovered` | **Review pause**. The new darts are held for the next turn |
-| Nothing known, board out of sight < 5 s | A blip: a whole visit can't come and go that fast | Any darts as `recovered`, in the same visit. Nothing for an empty board | Scores them, and the turn is flagged. **No pause** |
-| Nothing known, out of sight ≥ 5 s or for an unknown time | A whole visit may have come and gone | `TakeoutFinished{inferred:true}`, then any darts as `recovered` | **Review pause** |
+| A takeout first seen, known darts listed or gone | Darts come off during a takeout. But a gone dart may have been withdrawn first, and with room in the visit another dart may have been thrown and pulled meanwhile | Gone darts are kept, flagged `pendingReview`. With room in the visit for another dart, every dart of the visit is flagged, after any outage: one throw, the walk up and one pull need no whole visit | Scores them; the turn is flagged. **No pause** |
+| Nothing known, out of sight < 3 s, the board's event as before | A blip: a whole visit can't come and go that fast | Any darts as `recovered`, in the same visit. Nothing for an empty board | Scores them, and the turn is flagged. **No pause** |
+| Nothing known, out of sight ≥ 3 s or for an unknown time, or the board's event says a visit ended | A whole visit may have come and gone | `TakeoutFinished{inferred:true}`, then any darts as `recovered` | **Review pause** |
 
-**The outage rule.** `MIN_UNSEEN_VISIT_MS` = 5 s is the shortest time in which a whole visit can come and go unseen: someone throws, the board detects the dart, and the darts are pulled out. Known darts missing from the snapshot always infer a takeout, however short the outage. With no darts known, a resync infers one only after an outage at least that long. So a Wi-Fi blip on an empty visit ends nobody's turn, and darts thrown during it continue the visit. **sim**: the chaos suites keep every simulated visit at least 6 s long (5 s, plus 1 s for the simulated frame delays).
+**The outage rule.** `MIN_UNSEEN_VISIT_MS` = 3 s is the shortest time in which a whole visit can come and go unseen: someone throws, the board detects the dart, and the darts are pulled out. No visit is shorter, first dart to last dart out (owner decision). Known darts missing from the snapshot always infer a takeout, however short the outage. With no darts known, a resync infers one only after an outage at least that long, or when the board's event says a visit ended. So a Wi-Fi blip on an empty visit ends nobody's turn, and darts thrown during it continue the visit. Every outage is measured from at least `LINK_LOSS_MS` before the connection ended (below), so a hidden visit measures at least 3 s plus that second, less the frame delay. **sim**: the simulated visits last at least 3 s (`SIM_MIN_VISIT_MS`), and the simulated frame delays (up to 0.65 s) stay inside `LINK_LOSS_MS`. The threshold was 5 s, then 2 s; at 2 s a quick relaunch after a crash on an idle board measured as a hidden visit (§6.5).
+
+**The board's event on a resync.** Darts don't only leave by a takeout, so with nothing known and an empty board the event counts as evidence, however short the outage. A takeout is inferred when the event changed since the last read:
+- to "Manual reset";
+- to "Takeout finished", unless it ends an empty takeout we saw start;
+- to "Throw detected" with no darts listed (darts thrown and withdrawn).
+
+It is also inferred for a reset or finished takeout of a visit whose darts the board all withdrew (`allWithdrawn`): nothing of it is known, but it had darts. After a crash, the rebuilt state guesses the last event from the last board fact (§6.5).
 
 **Contact.** The outage runs from the last good contact with the board:
 - a frame, or a state read (`GET /api/state`);
@@ -485,7 +513,9 @@ for i in 0..max(len(throws), len(known))-1:
 It is measured on the monotonic and on the wall clock, and the longer one counts. The wall clock also covers device sleep and a crash (§6.5). With no contact known at all, the outage counts as long. Contact counts for less in three cases:
 - A heartbeat more than 0.5 s late (the app was frozen) proves nothing, and triggers a state read.
 - A socket that went quiet (a liveness poll is out) counts only to its last `state` frame or state read.
-- When a connection breaks, contact counts only up to `LINK_LOSS_MS` (1 s) before the break, because its last frames may never have arrived.
+- When a connection ends (it breaks, the app lets it go, or the app crashes), contact counts only up to `LINK_LOSS_MS` (1 s) before the end, whatever arrived last: its last frames may never have arrived, and the frame that did may have been late. This cap always applies, so a late last frame can't make the outage come out shorter than the time the board was out of sight.
+
+`lastContactAt()` gives the adapter's contact as it would count it if the link ended now, for the runtime to keep across a crash (§6.5). One limit is left: on a socket that died without closing, heartbeats count until the adapter notices, at most the 5 s liveness wait and its polls (RISK-REGISTER R30).
 
 **Reconciliation (owner decision R).** The system never guesses silently: every uncertain turn is flagged ⚠ "Needs review" (W3 banner, one press to W4).
 
@@ -495,6 +525,7 @@ It is measured on the monotonic and on the wall clock, and the longer one counts
 3. A person checks the turn in W4, corrects it if needed, and confirms with the command `ConfirmTurn{turnIndex}`. The host appends `TurnReviewed{playerId, turnIndex}`, then `GameResumed{reason:'review'}`, then the next `TurnStarted`.
 4. Board darts that arrive during the pause are **held**, not dropped, and are attributed to the next turn when it starts.
 5. A takeout inferred during the pause is held too, in order with the darts, even for a visit with no darts: a whole visit may have come and gone offline. When the pause ends, it ends the next turn flagged, and that turn gets a review pause of its own.
+6. The outage may have hidden any number of visits, or none, so who is up after the pause is a guess. The turn the release hands over to (`TurnRecord.afterReview`) is flagged when it ends, and so is every turn holding a dart that was held. The turns after them are plain again. A "Who's up next?" choice on the review screen is Phase 4 work (ROADMAP).
 
 Once the game is over, nothing is held. A correction that reopens the game hands what was held to the next turn.
 
@@ -502,7 +533,9 @@ A `needsReview` turn without a pause (same-visit recovery) is confirmed the same
 
 **Finishing with unconfirmed turns.** While any `needsReview` turn has no matching `TurnReviewed`:
 - `GameFinished` stays provisional;
-- the host refuses `CloseSession{outcome:'completed'}`.
+- the host refuses `CloseSession{outcome:'completed'}`, and `Rematch`.
+
+The live turn counts as unreviewed too, before it ends. A turn is flagged only when it ends, and the winning visit stays live until its takeout. So the live turn counts when its darts would flag it (a recovered or `pendingReview` dart, more than three darts) or when board darts are held for later turns. The snapshot's `canComplete` is then false. Ending the turn (a takeout or *Next player*) and confirming it lifts that.
 
 `CloseSession{outcome:'abandoned'}` is always allowed.
 
@@ -520,11 +553,40 @@ The adapter's `known[]` is rebuilt from the last visit's events. This works beca
 In code, `ArcadeRuntime.resumeSession(sessionId)` does the resume:
 - `SessionHost.resume` loads the log and folds it.
 - `rebuildVisitState` rebuilds the adapter's visit state from the log's board facts. It also records `observedAt`: when the board was last read, from the latest fact that came from a reading.
+- The runtime picks the `observedAt` to resume from (below).
 - `adapter.restore()` hands that state to the stopped adapter, and the source restarts. Its first connection resyncs against the restored visit and measures the outage from `observedAt` on the wall clock (§6.4). Without `observedAt`, the outage counts as long enough to hide a whole visit.
 
-Inputs that arrive meanwhile wait and go to the resumed host. **sim**: in the end-to-end suite, 200 clean runs dropped at a random quiet moment and resumed from the store end in exactly the state of the uninterrupted run, and 200 more under faults never mismatch silently. The resume time on a Fire OS stick is still to be measured (ROADMAP P2).
+**The ContactStore.** An idle board sends no facts, so the log's last reading can be long before a crash. Measured from it, a restart after a quiet spell would count the whole spell as an outage and infer a takeout that never happened. So the runtime keeps the adapter's own last contact (`BoardSource.lastContactAt()`) in a key-value `ContactStore`, per session:
+- It writes every 250 ms (`CONTACT_EVERY_MS`) while the board is online and a session is open, and only once every fact received is through the log. A contact newer than a fact the log may still lose could hide that fact.
+- `lastContactAt()` already applies the adapter's contact rules, `LINK_LOSS_MS` included, so it is stored and used as it is. A source without one stores its heartbeat less `LINK_LOSS_MS`, the same rule.
+- While the board stays online, the stored value only moves forward. The adapter's own goes back to its last read while a liveness poll is out; stored then, a crash in the next moment would look like a 5 s outage.
 
-One gap is known: if `LogStore.append` fails, the host stays as it was, but the adapter has already moved on (RISK-REGISTER R28).
+**Which `observedAt`.** The latest of three, each counting only to when the board was surely in sight:
+- the value in the `ContactStore`, as stored;
+- the log's last reading, less `LINK_LOSS_MS`: the crash ended the connection, and frames sent just before may never have arrived (§6.4);
+- this run's own contact, less `LINK_LOSS_MS`, when the runtime rebuilds the very session it is playing (below).
+
+A relaunch within 1.5 s on an idle board therefore measures at most about 2.8 s (1.5 s + 1 s + a 250 ms heartbeat + the reconnect), under the 3 s threshold, and infers nothing. One after 2 s measures 3 s or more, so a whole visit may have come and gone, and it infers a takeout **sim**. The app still has to provide a key-value `ContactStore` (ROADMAP P4); without one, a resume after a quiet spell pauses for review.
+
+**What the rebuild restores.** The visit key, the known darts in board order with their `indexInVisit`, coordinates and doubts (`suspectedGhost`, `inDoubt`), whether a takeout is running, the last two visits' darts, `takeoutTail` (the last dart came out while the board still shows the takeout), `allWithdrawn` (the visit had darts, all withdrawn) and a guess of the board's last event. Property tests check that, for random board histories, the rebuilt state equals the tracker's own and a tracker resumed from it goes on as the original would **sim**. Where the log can't tell, the rebuild keeps the doubt: more flags, never fewer.
+- A call-off with 3 darts leaves the board's status at "Takeout", so it logs nothing. The rebuilt state is still in the takeout, and the resumed tracker ends it on the next snapshot, flagging the darts gone, if any. It may over-flag, never under-flag.
+- A flagged update stays flagged: the log can't tell an unreadable re-read (which a clean re-read settles) from a dart in doubt (which nothing settles).
+- After an inferred takeout the board's last event is unknown.
+
+**A failed log append** (RISK-REGISTER R28). The host writes ahead: if `LogStore.append` fails, it stays as it was, but the adapter has already moved on and won't send the fact again. So the runtime:
+1. retries the append once;
+2. if that fails too, rebuilds the adapter's visit state from the log (`rebuildVisitState` + `restore()`) and restarts it, so it resyncs. What the fact said comes back as recovered, and its turn is flagged; a lost takeout comes back inferred. Facts the adapter sent after the lost one are dropped with it, and so is the contact they brought: the resync measures its outage from the last contact before the lost fact, less `LINK_LOSS_MS`. A lost inferred takeout is then inferred again;
+3. rebuilds at once the first time; while the storage keeps failing, waits 1, 2, 5, then every 10 s before each next rebuild, so a dead disk is no reconnect loop against the board.
+
+Each problem goes to `onError` as a `RuntimeProblem` with the recovery taken (`retried`, `resync`, `none`). The default logs it with `console.error`.
+
+Inputs that arrive during a resume wait and go to the resumed host. **sim**, in the end-to-end suite:
+- 200 clean runs dropped at a random quiet moment and resumed from the store end in exactly the state of the uninterrupted run;
+- 200 runs crashed during a long idle stretch and relaunched within 1.5 s end exactly like uninterrupted ones (1,000 more seeds too: the longest outage measured was 2.77 s);
+- 200 runs crashed at any moment under faults (mid-visit, mid-takeout, idle) and relaunched after 0–10 s, and 150 with a failing store, never mismatch silently;
+- the 1,000-run mix has crashes in a fifth of its runs and a failing store in another fifth.
+
+The resume time on a Fire OS stick is still to be measured (ROADMAP P2).
 
 ---
 
@@ -608,15 +670,18 @@ export interface Segment {
 | `VisitReset` | `{ visitKey, reason: 'manual-reset' }` |
 | `BoardStatusChanged` | `{ status: 'ready'\|'throwing'\|'takeout'\|'stuck-takeout'\|'calibrating'\|'stopped'\|'error', health?: { fps?: number, camFps?: number[] } }` |
 | `SourceConnectionChanged` | `{ state: 'connecting'\|'resyncing'\|'online'\|'offline', attempt?: number, error?: string }` |
-| `SourceAnomaly` | `{ rawExcerpt: string, note: string }` (unknown enum or shape; raw excerpt is size-capped) |
+| `SourceAnomaly` | `{ rawExcerpt: string, note: string }` (unknown enum or shape, or an internal error the adapter survived). Both are secret-redacted (§9.5); `note` is capped at 500 characters (`SOURCE_ANOMALY_NOTE_MAX`), and the adapter cuts `rawExcerpt` to 512 (the schema allows 2,000) |
 
 `recovered: true` marks a dart first seen in a resync snapshot. `inferred: true` marks a takeout the adapter did not see happen. The host treats both as uncertain (§6.4).
 
-`pendingReview: true` marks a dart the adapter is unsure of, for one of two reasons:
+`pendingReview: true` marks a dart the adapter is unsure of, for one of three reasons:
 - its segment could not be read (§7.3), so it is logged as a miss;
-- it may be a ghost (below).
+- it may be a ghost (below);
+- its identity is in doubt (`KnownDart.inDoubt`): it was gone when a takeout was first seen, or when a resync found one going on; its visit, first seen in a takeout after an outage, had room for a dart thrown and pulled unseen; it survived a call-off that dropped other darts; or it was matched without coordinates when the board removed a dart that was not the last one, or across an outage (§6.1, §6.3).
 
-The host scores the dart and flags its turn `needsReview` when the turn ends, with no pause. A `SourceAnomaly` just before the dart says why. The flag follows the latest fact about the dart: a re-read that settles an unreadable segment clears it, but a suspected ghost's `DartUpdated` keeps it, because a re-read can't settle whether it is a ghost.
+The host scores the dart and flags its turn `needsReview` when the turn ends, with no pause. A `SourceAnomaly` just before the dart says why, where there is a reading to show. The flag follows the latest fact about the dart: a re-read that settles an unreadable segment clears it, but a suspected ghost's or a doubted dart's `DartUpdated` keeps it, because a re-read can't settle who the dart is.
+
+**A `DartUpdated` with the segment unchanged** means "flag only": `previous` and `segment` are the same, and `pendingReview` is set. The host appends no `DartCorrected` for it; the turn is flagged when it ends.
 
 **Ghost darts** (decision R). A new visit's first darts can sit exactly where the previous visit's darts were: the same segment, in the same order, within about 0.34 mm (`SAME_DART_TOLERANCE` = 0.002, with r = 1 at the outer double wire 🟡). Either the board put that visit back after its takeout, or new darts landed in the same holes. Coordinates can't tell the two apart, so the adapter counts them with `pendingReview: true` and a `SourceAnomaly`, and a person voids them in W4 if they were the old darts. They also prove nothing about an outage: with no darts known, a long one still infers a takeout (§6.4). A late frame of the old visit never gets this far: a frame that looks like it is confirmed with `GET /api/state` first. The adapter used to drop such darts as ghosts, which lost a real dart in chaos seed 7489 **sim**.
 
@@ -630,7 +695,7 @@ The host scores the dart and flags its turn `needsReview` when the turn ends, wi
 | `DartCorrected` | `{ throwId, previous: Segment, segment, reason: 'user'\|'source-update' }` |
 | `DartVoided` | `{ throwId, reason: 'false-detection'\|'duplicate'\|'source-withdrawn'\|'user' }` |
 | `DartAdded` | `{ throwId, playerId, turnIndex, dartIndex, segment, reason: 'undetected'\|'bounce-out'\|'manual-mode' }` |
-| `TurnEnded` | `{ playerId, turnIndex, reason: 'takeout'\|'bust'\|'game-rule'\|'manual-skip', needsReview?: true }`. `needsReview` is set when the turn has a `recovered` dart or a `pendingReview` dart (§7.4), holds more than three darts, or ended on an inferred takeout (§6.4) or a board reset |
+| `TurnEnded` | `{ playerId, turnIndex, reason: 'takeout'\|'bust'\|'game-rule'\|'manual-skip', needsReview?: true }`. `needsReview` is set when the turn: has a live `recovered` or `pendingReview` dart (§7.4); holds more than three live darts; holds a dart that was held during a review pause; was started by the release of a review pause (§6.4); holds a dart the board contradicted a person about, voided ones too (§6.3); ended on an inferred takeout (§6.4) or a board reset; or ended at a takeout with nothing left live and a dart the board withdrew |
 | `TurnReviewed` | `{ playerId, turnIndex }`. A person confirmed a `needsReview` turn (`ConfirmTurn`) |
 | `GamePaused` / `GameResumed` | `{ reason: 'menu'\|'correction'\|'board-offline'\|'app-background'\|'review' }`. `review` holds the next turn until `TurnReviewed` (§6.4) |
 | `GameFinished` | `{ standings: { playerId, rank, score }[], provisional: true }`. Stays provisional while any `needsReview` turn has no `TurnReviewed` |
@@ -709,7 +774,7 @@ Adding a game means **one folder plus one registry line**.
 | Situation | Behaviour |
 |---|---|
 | Darts 1–3 detected | `DartThrown` for the current player, `dartIndex` 0–2 |
-| `TakeoutFinished` (observed) | `TurnEnded{reason:'takeout'}`; pad missing darts per `missingDartsAreMisses` |
+| `TakeoutFinished` (observed) | `TurnEnded{reason:'takeout'}`; pad missing darts per `missingDartsAreMisses`. Also for a visit whose darts were all voided; the takeout of a visit that never had a dart ends nothing (§6.3) |
 | `TakeoutFinished{inferred:true}` | `TurnEnded{reason:'takeout', needsReview:true}` with no padding, then the review pause (§6.4) |
 | Game returns `endTurn:'bust'` | Later darts in the visit are shown greyed and not scored. The turn ends at takeout |
 | Board offline mid-turn | `GamePaused{board-offline}`. After 5 s the UI offers *Enter manually*. On reconnect, resync (§6.4) |
@@ -759,6 +824,8 @@ Before release, names and mechanics are checked against BattleUp's catalogue so 
 | iOS / iPadOS | `NSLocalNetworkUsageDescription`. The first LAN connect triggers the **Local Network prompt** and may fail before the answer, so retry. `NSAllowsLocalNetworking = YES` (ATS blocks IP addresses by default on iOS 17+). `NSBonjourServices: ["_autodarts-board._tcp"]` for discovery. Keep-awake during games | ✅[P17][P18] |
 | Android / Fire OS | `usesCleartextTraffic` (arbitrary LAN IPs can't be listed in `domain-config`). Plan for Android 17's `ACCESS_LOCAL_NETWORK` when targeting API 37. TV profile: leanback launcher, no touch requirement, `FLAG_KEEP_SCREEN_ON` | ✅[P19][P20] |
 | Vega (backlog) | Cleartext policy in the manifest (WebView blocks HTTP by default ✅[P9]). **Native `ws://` to a LAN IP is undocumented**, so spike first if Vega is ever needed. No mDNS library, so discovery is manual or QR | ⚪ |
+| All native builds (Expo) | **Fetch:** keep Expo's global fetch (`expo/fetch`), and don't set `EXPO_PUBLIC_USE_RN_FETCH`, which brings back React Native's own. Expo's fetch honours `redirect: 'error'` and streams bodies, so the transport's body cap cuts a long answer off early. React Native's ignores the redirect setting, and its iOS and Android stacks follow redirects themselves; it also buffers the whole body before the cap can measure it. **WebSocket:** on Android and Fire OS the socket's upgrade request follows redirects inside the native stack, where the app can't check them (RISK-REGISTER R29) | 🟡 (transport review) → 🔬 HC1 |
+| Log storage (all) | SQLite, opened in WAL mode with a 5 s busy timeout and `synchronous = FULL`, so a read stepping through rows never makes an append fail with "database is locked". The busy timeout is set again on each exclusive transaction's own connection. On web, expo-sqlite defines exclusive transactions but refuses them, so appends use `withTransactionAsync`: the app passes `expoSqliteExecutor(db, { exclusive: Platform.OS !== 'web' })` (ROADMAP P4). Loads and appends run one at a time, so a read never sees a batch that then rolls back | **sim** (node:sqlite and an expo-shaped stub) → 🔬 on devices |
 
 ### 9.4 Discovery (W0 screen)
 
@@ -769,9 +836,10 @@ Before release, names and mechanics are checked against BattleUp's catalogue so 
 5. **Demo mode**: the simulator adapter, for development and for playing without the board. It would also satisfy App Review ✅[P21] if the app is ever published.
 
 **In the app today** (W0):
-- The **last-known board** is offered on launch and checked, unless the iOS Local Network note hasn't been shown yet.
-- **Manual address**: private addresses only, port 3180 unless one is given.
-- **Scan network** is opt-in and probes one /24 (254 addresses, 12 at a time, 400 ms each). A picker offers the /24 from the typed or last-known address, then common home-router subnets. The app can't read its own IP address without a new dependency, so it can't simply scan its own subnet.
+- The **last-known board** is offered on launch and checked, unless the iOS Local Network note hasn't been shown yet. A saved address that fails today's address check (a name, a leading-zero IPv4, a public address saved by an older build) is discarded on load.
+- **Manual address**: private addresses only, port 3180 unless one is given. Only **canonical IP literals** count: IPv4 in plain dotted decimal with no leading zeros (`010.0.0.5` is 10.0.0.5 to one parser and octal 8.0.0.5, a public address, to another), and IPv6 in hex groups, no zone id, kept in RFC 5952 form. **Names, `.local` included, are refused until mDNS exists:** Fire OS has no mDNS resolver, so a name goes to DNS, which can answer with a public address. W0 explains this and asks for the IP address.
+- **Scan network** is opt-in and probes one /24 (254 addresses, 12 at a time, 400 ms each). A picker offers the /24 from the typed or last-known address, then common home-router subnets. The app can't read its own IP address without a new dependency, so it can't simply scan its own subnet. A host counts as a board only if it answers `GET /api/version` with 200, without a redirect, and a short version string: version checks (scan, manual, last-known) read at most 128 bytes.
+- **Leaving W0 cancels a pending connect.** Cancel, *Play demo*, leaving the screen or unmounting it abandons the attempt and closes the link it opened, and a late answer changes nothing (`ConnectAttempts`). So a slow board can't push the ticker over a demo game. An attempt that got online is done and keeps its link. The screen wiring itself has no render test yet.
 - **mDNS is not implemented yet.** It needs a native module that isn't on the verified dependency list (ADR-003), so `platform` has only its interface.
 - There is no QR code for TV yet.
 
@@ -782,9 +850,16 @@ Before release, names and mechanics are checked against BattleUp's catalogue so 
   - `WS /api/events`, optionally with `?type=state`.
   - A unit test fails the build if any other path, or any method other than GET, appears.
   - This blocks `/api/events/system`, and `/api/config` and `/api/system`, which return the board **API key and TLS key** 🟡[C2].
+- **The board address.** The transport builds every HTTP and WebSocket URL from the canonical host (§9.4) and checks it again before each request and each socket, so what is checked is what a URL parser will reach.
+- **No redirects.** Every GET asks for `redirect: 'error'`. Not every stack honours that (§9.3), so before any of the body is read, the transport refuses and aborts a response that says it was redirected, is a 3xx, or comes from any other URL. URLs are compared in one normal form (canonical host, port written out), so a legitimate answer is never refused for how the parser wrote it. A stack that follows a redirect itself has already sent that request, though, and a WebSocket upgrade can't be checked at all (RISK-REGISTER R29).
+- **Body cap.** 256 KiB per body and per frame (128 bytes for a version check). A streamed body is read chunk by chunk and dropped as soon as it passes the cap, and a declared `Content-Length` over the cap is refused unread. Without a stream (React Native's own fetch) the body is buffered before it can be measured.
 - **No Autodarts credentials** are ever requested or stored.
 - **Player data** (names, avatars, stats) stays on-device. No accounts and no analytics in v1, so the App Store privacy label is "Data Not Collected".
 - **Diagnostic exports** (raw-frame ring buffer) are user-initiated through the share sheet and secret-free, because those endpoints are never fetched.
+- **Secret redaction**, as a second line of defence wherever diagnostics can carry text: the ring buffer, every `SourceAnomaly` note and excerpt, and connection error texts.
+  - A key is a secret when its name contains, in any case: token, password, passwd, secret, key (`apiKey`, `api-key`, `x-api-key`, `privateKeyPem`), auth (`Authorization`), cert, pem, private, credential, session or cookie.
+  - The whole value under such a key goes, whatever its shape: a string, a number, an object or a list. Complete JSON is parsed and rewritten. Cut-off JSON and plain text are scanned for quoted pairs (nested values matched to their closing bracket, or to the end of the text) and for `key: value` and `key=value`.
+  - The ring buffer redacts a frame before it cuts it, so a cut can never expose part of a secret. Property tests plant secrets of every shape under every kind of key **sim**.
 
 ### 9.6 Companion phone (Phase 6, optional)
 
@@ -975,6 +1050,8 @@ Game names are original placeholders.
 | Local API needs no auth | 🟡[C2][C3] → 🔬 |
 | Frame field names, enums, miss shapes, coords convention | 🟡[C1][C2][C3] → 🔬 recorded fixtures · **sim** (community fixtures, golden output) |
 | Board withdraws or updates darts in place | 🟡[C2] → 🔬 · **sim** |
+| A dart's coordinates appear in every frame or in none; what a call-off frame looks like; how `event` behaves while darts are pulled one at a time | ⚪ (the adapter's and the board model's assumption, §4.3) → 🔬 HC1 · **sim** |
+| No visit lasts less than 3 s, first dart to last dart out (`MIN_UNSEEN_VISIT_MS`) | owner decision; ⚪ → 🔬 HC1 (time the quickest one-dart visit) · **sim** |
 | `/api/config` and `/api/system` expose secrets | 🟡[C2] (never called) |
 | mDNS `_autodarts-board._tcp` on 2.x | 🟡[C15] → 🔬 |
 | Board needs the internet at start | ✅[S4] (v1 FAQ) / 🟡 for v2 → 🔬 |

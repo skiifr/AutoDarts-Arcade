@@ -2,7 +2,7 @@
 
 An arcade-style party-game frontend for an existing camera-scored steel-tip dartboard. It ships as a native app for **iPhone, iPad, Android and Amazon Fire TV**, and reads darts from the board over your home network without modifying the detection software.
 
-> **Status: Phases 2 and 3 built and proven in simulation.** The live board connection (Phase 2) and the game engine with four games (Phase 3) pass their test suites against the simulator and the fake board. W0 connects to a board and the dart ticker shows its darts; the game screens still run on demo darts. Hardware checkpoint HC1 (board probe, fixtures, Pi baseline, device installs) waits for access to the board and the Pi. The visual redesign (owner decision V) is in progress.
+> **Status: Phases 2 and 3 built and proven in simulation.** The live board connection (Phase 2) and the game engine with four games (Phase 3) pass their test suites against the simulator and the fake board. The engine, boundary and board fixes are merged and reconciled: 5,000 extra seeds of each chaos suite find no silent mismatch, and uncertain turns are flagged for review. W0 connects to a board and the dart ticker shows its darts; the game screens still run on demo darts. Hardware checkpoint HC1 (board probe, fixtures, Pi baseline, device installs) waits for access to the board and the Pi. The visual redesign (owner decision V) is in progress.
 > **Scope:** private home use. Target devices: iPhone, iPad, Android and a Fire TV Stick 4K Max, all installed directly with no store listings.
 > This is an independent community project. It is not affiliated with or endorsed by Autodarts GmbH, Winmau or BattleUp. "AutoDarts Arcade" is the name for private home use, and would be revisited only if the app were ever published.
 
@@ -10,7 +10,7 @@ An arcade-style party-game frontend for an existing camera-scored steel-tip dart
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Research findings (Autodarts 2.x, licensing, community projects, Pi 4, Fire TV / Vega), system design, event schema, game engine, wireframes, and the verified-vs-assumed ledger |
 | [ROADMAP.md](ROADMAP.md) | Owner decisions (Q1–Q6, R, S, V), six implementation phases and hardware checkpoint HC1 with their gates, acceptance criteria, and the testing strategy |
-| [RISK-REGISTER.md](RISK-REGISTER.md) | 28 scored technical, legal and platform risks with mitigations |
+| [RISK-REGISTER.md](RISK-REGISTER.md) | 30 scored technical, legal and platform risks with mitigations |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to run the checks, the package dependency rule, the code-reuse rule and commit conventions |
 
 ## Getting started
