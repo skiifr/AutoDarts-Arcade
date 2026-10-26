@@ -222,10 +222,23 @@ export const TurnEnded = defineEvent(
   }),
 );
 
-const PauseReasonSchema = z.enum(['menu', 'correction', 'board-offline', 'app-background']);
+export const PAUSE_REASONS = ['menu', 'correction', 'board-offline', 'app-background', 'review'] as const;
+/**
+ * `review`: a takeout may have happened while the board was offline (`TakeoutFinished{inferred}`).
+ * The host ends the turn flagged `needsReview` and starts no new turn until a person confirms it
+ * (`ConfirmTurn` → `TurnReviewed` → `GameResumed{review}`).
+ */
+export const PauseReasonSchema = z.enum(PAUSE_REASONS);
+export type PauseReason = z.infer<typeof PauseReasonSchema>;
 
 export const GamePaused = defineEvent('GamePaused', z.object({ reason: PauseReasonSchema }));
 export const GameResumed = defineEvent('GameResumed', z.object({ reason: PauseReasonSchema }));
+
+/** A person checked a `needsReview` turn (and corrected it if needed). Clears the flag for that turn. */
+export const TurnReviewed = defineEvent(
+  'TurnReviewed',
+  z.object({ playerId: PlayerIdSchema, turnIndex: TurnIndexSchema }),
+);
 
 export const StandingSchema = z.object({
   playerId: PlayerIdSchema,
@@ -266,6 +279,7 @@ export const GAME_FACT_SCHEMAS = [
   DartVoided,
   DartAdded,
   TurnEnded,
+  TurnReviewed,
   GamePaused,
   GameResumed,
   GameFinished,
