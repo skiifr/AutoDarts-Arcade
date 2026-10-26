@@ -77,8 +77,12 @@
 - **Mitigation:**
   - Snapshot diff with `(visitKey, index)` idempotency.
   - Liveness polling.
-  - Resync with inferred takeouts; `recovered` darts flagged for review (ARCHITECTURE §6).
-  - P2 chaos suite: 1,000 runs, zero silent mismatches.
+  - Resync with inferred takeouts (ARCHITECTURE §6.4).
+  - Reconciliation (owner decision R):
+    - darts recovered within the same visit are scored as `recovered`, and the turn is flagged `needsReview` without a pause;
+    - an inferred takeout ends the turn `needsReview`, pads no misses, and pauses the game until a person confirms the turn (`ConfirmTurn` → `TurnReviewed`);
+    - a session can't close as completed while a flagged turn is unconfirmed.
+  - P2 chaos suite: 1,000 runs, zero silent mismatches, and a review pause after every inferred takeout.
 - **Early warning:** Chaos-suite failures; `needsReview` frequency at home.
 - **Owner:** Lead.
 

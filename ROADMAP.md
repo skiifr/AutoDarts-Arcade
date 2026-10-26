@@ -29,6 +29,7 @@
 | **Q4** | GPL app-store exception? | **Not needed for private use.** You are the sole copyright holder, so the GPL doesn't restrict your own installs. Revisit only before accepting outside contributions or publishing (R07) |
 | **Q5** | Product name | **Keep "AutoDarts Arcade"** for home use. Revisit only if it's ever published (R08) |
 | **Q6** | Upgrade the detection host if the Pi 4 proves unreliable? | **Only after Phase 5, and only if proven.** P1–P5 must work on the current Pi 4. Evidence is collected throughout, and the **H1 hardware review** after P5 decides (see below) |
+| **R** | How is uncertain history reconciled after a reconnect? | **Flag it, and pause when a takeout may have been missed.** Same-visit recovered darts are scored and the turn is flagged `needsReview`. An inferred takeout ends the turn `needsReview` with no padded misses, and the next turn waits until a person confirms (`ConfirmTurn`). A session can't close as completed while a flagged turn is unconfirmed (ARCHITECTURE §6.4) |
 | **S** | May the app ever write to the board (for example, reset a stuck takeout)? | **No.** The transport allows only GET `/api/state`, `/api/version`, `/api/state/stats`, `/api/cams/stats` and `WS /api/events`. A stuck takeout is reset from Autodarts' own app, and Arcade offers manual entry meanwhile (ARCHITECTURE §4.3, §6.3, §9.5) |
 
 ---
@@ -141,6 +142,7 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
 - [ ] **Golden replay:** each P1 fixture produces a byte-identical normalized log, committed as a golden file.
 - [ ] **Chaos suite:** 1,000 seeded runs with random disconnects, duplicate frames, missed frames and reconnects at every point in a visit.
   - Final dart set equals the ground truth, **or** the affected turn is flagged `needsReview`.
+  - Whenever a takeout was inferred, the game paused for review before the next turn (owner decision R).
   - **Zero** silent mismatches.
 - [ ] Resync completes ≤ 2 s after the board becomes reachable, measured with the fault proxy.
 - [ ] Killing the app mid-turn and relaunching restores the exact state. Resume ≤ 3 s on a Fire OS stick.
@@ -160,7 +162,7 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
 **Goal:** a pure, deterministic engine with a plugin game API, proven on well-known rules before inventing new ones.
 
 **Scope**
-- `packages/engine`: fold/replay, turn policy, commands, provisional finish, effect emission for new events only, and an optional snapshot cache.
+- `packages/engine`: fold/replay, turn policy (including the review pause and `ConfirmTurn`, ARCHITECTURE §6.4), commands, provisional finish, effect emission for new events only, and an optional snapshot cache.
 - `packages/games`:
   - **Countdown** (x01 with in/out options);
   - **Cricket**;
@@ -189,7 +191,7 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
   - focus-aware components (`TVFocusGuideView`);
   - the dartboard picker (SVG);
   - theme and player colours (colour-blind-safe palette).
-- Correction flow with **dry-run preview**; provisional results; "needs review" badges.
+- Correction flow with **dry-run preview**; provisional results; "needs review" banners and the review pause with **Confirm turn**.
 - Player profiles (local), guests, settings (quality tier, house rules).
 - Basic audio through `AudioPort`; keep-awake; Home → pause on TV.
 - **Demo mode** (simulator), for development and for trying games without the board.
@@ -201,6 +203,10 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
   - on iPhone.
 - [ ] The common corrections (wrong bed, miss ↔ hit, add a bounce-out, void a false dart) take **≤ 5 remote presses** from W3.
 - [ ] A correction that changes the winner withdraws the victory screen and resumes play correctly.
+- [ ] Needs review (owner decision R), driven by the simulator's fault modes:
+  - a needs-review banner reaches W4 in one press, and **Confirm turn** there clears it;
+  - after an inferred takeout the game stays paused until the turn is confirmed, missing darts are not counted as misses, and darts thrown meanwhile land in the next turn;
+  - Rematch, New game and Menu can't close the session as completed while a turn still needs review; quitting always works.
 - [ ] Amazon's TV test criteria, used as a UX checklist rather than for store submission, pass a self-audit:
   - D-pad navigation everywhere;
   - Back always works;

@@ -429,10 +429,11 @@ for i in 0..max(len(throws), len(known))-1:
 |---|---|
 | **Normal dart** | `DartDetected` → host emits `DartThrown` for the current player, with `dartIndex = indexInVisit`. |
 | **Miss** (on-board outside the doubles, or off-board) | Normalized to `bed: "miss"`, `points: 0`. Keeps `missSector` when given (`M12`), which is useful for "near-miss" effects and stats. |
-| **Bounce-out or fallen dart** (usually *not* detected) | At `TakeoutFinished` with fewer than 3 darts, the house rule `missingDartsAreMisses` (default **on**) appends `DartAdded{reason:'undetected'}` as misses. Players can relabel one as "bounce-out" in W4. |
+| **Bounce-out or fallen dart** (usually *not* detected) | At an **observed** `TakeoutFinished` with fewer than 3 darts, the house rule `missingDartsAreMisses` (default **on**) appends `DartAdded{reason:'undetected'}` as misses. Players can relabel one as "bounce-out" in W4. An inferred takeout is never padded (§6.4). |
 | **Board changes its mind** (`DartUpdated` / `DartWithdrawn`) | Host appends `DartCorrected{reason:'source-update'}` / `DartVoided{reason:'source-withdrawn'}`, then replays. The UI shows a subtle "adjusted" chip. |
 | **User correction** | W4 sends commands: `CorrectDart` / `VoidDart` / `AddDart`. Host appends the event and replays. Any dart in the session is correctable, including after "game over" (results stay *provisional* until the next action). |
 | **Takeout** | `TakeoutFinished` ends the turn. On the 3rd dart (board status `Takeout`) the UI already shows "Remove darts". |
+| **Uncertain history after a reconnect** (owner decision R) | Same-visit darts are scored as `recovered` and the turn is flagged `needsReview`, with no pause. A takeout that may have happened offline (`TakeoutFinished{inferred:true}`) ends the turn `needsReview`, pads nothing and pauses the game until a person confirms the turn. Details in §6.4. |
 | **Takeout with 0 darts** (hand in front of the cameras) | Ignored by default. A setting can make it count as "skip turn". |
 | **Stuck takeout** (2.0.2 bug 🟡[C12]) | `Takeout in progress` with no darts for > 8 s → `BoardStatusChanged{status:'stuck-takeout'}` and a banner telling the player to reset the board from Autodarts' own app, with *Enter manually* as the way to keep playing. Arcade never sends a reset itself: it never writes to the board (owner decision S). |
 | **Darts already on the board at game start** | They are treated as baseline, not scored. The UI says "Clear the board to start". |
@@ -450,13 +451,27 @@ for i in 0..max(len(throws), len(known))-1:
 
 **Resync** compares the snapshot to `known[]`:
 
-| Snapshot vs `known[]` | Interpretation | Action |
-|---|---|---|
-| Same prefix, maybe more darts | Same visit | Emit only the new darts, flagged `recovered: true` |
-| Empty | A takeout happened offline | Synthesize `TakeoutFinished{inferred:true}` |
-| Different prefix | Visit boundary happened offline | Synthesize `TakeoutFinished{inferred:true}`, then new darts as `recovered` |
+| Snapshot vs `known[]` | Interpretation | Adapter emits | Host does |
+|---|---|---|---|
+| Same prefix, maybe more darts | Same visit | Only the new darts, flagged `recovered: true` | Scores them as `DartThrown{origin:'recovered'}`. The turn goes on, and its `TurnEnded` carries `needsReview: true`. **No pause** |
+| Empty (while `known[]` had darts) | A takeout may have happened offline | `TakeoutFinished{inferred:true}` | **Review pause** (below) |
+| Different prefix | A visit boundary may have happened offline | `TakeoutFinished{inferred:true}`, then the new darts as `recovered` | **Review pause**. The new darts are held for the next turn |
 
-**Recovered darts are scored, but the host marks the affected turn ⚠ "Needs review"** (W3 badge, one press to W4). The system never guesses silently.
+**Reconciliation (owner decision R).** The system never guesses silently: every uncertain turn is flagged ⚠ "Needs review" (W3 banner, one press to W4).
+
+**Review pause.** Whenever a takeout was inferred:
+1. The host ends the current turn with `TurnEnded{reason:'takeout', needsReview:true}`. It does **not** pad missing darts as misses: `missingDartsAreMisses` applies only to observed takeouts.
+2. It appends `GamePaused{reason:'review'}` and does not start the next turn.
+3. A person checks the turn in W4, corrects it if needed, and confirms with the command `ConfirmTurn{turnIndex}`. The host appends `TurnReviewed{playerId, turnIndex}`, then `GameResumed{reason:'review'}`, then the next `TurnStarted`.
+4. Board darts that arrive during the pause are **held**, not dropped, and are attributed to the next turn when it starts.
+
+A `needsReview` turn without a pause (same-visit recovery) is confirmed the same way. `ConfirmTurn` then only appends `TurnReviewed`.
+
+**Finishing with unconfirmed turns.** While any `needsReview` turn has no matching `TurnReviewed`:
+- `GameFinished` stays provisional;
+- the host refuses `CloseSession{outcome:'completed'}`.
+
+`CloseSession{outcome:'abandoned'}` is always allowed.
 
 **App lifecycle.**
 - iOS drops sockets when the app is suspended 🟡. Arcade keeps the screen awake during games and runs **resync on foreground**.
@@ -553,6 +568,8 @@ export interface Segment {
 | `SourceConnectionChanged` | `{ state: 'connecting'\|'resyncing'\|'online'\|'offline', attempt?: number, error?: string }` |
 | `SourceAnomaly` | `{ rawExcerpt: string, note: string }` (unknown enum or shape; raw excerpt is size-capped) |
 
+`recovered: true` marks a dart first seen in a resync snapshot. `inferred: true` marks a takeout the adapter did not see happen. The host treats both as uncertain (§6.4).
+
 ### 7.5 Layer 2: game facts (from the host)
 
 | `type` | `payload` |
@@ -563,12 +580,13 @@ export interface Segment {
 | `DartCorrected` | `{ throwId, previous: Segment, segment, reason: 'user'\|'source-update' }` |
 | `DartVoided` | `{ throwId, reason: 'false-detection'\|'duplicate'\|'source-withdrawn'\|'user' }` |
 | `DartAdded` | `{ throwId, playerId, turnIndex, dartIndex, segment, reason: 'undetected'\|'bounce-out'\|'manual-mode' }` |
-| `TurnEnded` | `{ playerId, turnIndex, reason: 'takeout'\|'bust'\|'game-rule'\|'manual-skip', needsReview?: true }` |
-| `GamePaused` / `GameResumed` | `{ reason: 'menu'\|'correction'\|'board-offline'\|'app-background' }` |
-| `GameFinished` | `{ standings: { playerId, rank, score }[], provisional: true }` |
-| `SessionClosed` | `{ outcome: 'completed'\|'abandoned', finalStandings }` |
+| `TurnEnded` | `{ playerId, turnIndex, reason: 'takeout'\|'bust'\|'game-rule'\|'manual-skip', needsReview?: true }`. `needsReview` is set when the turn has a `recovered` dart or ended on an inferred takeout (§6.4) |
+| `TurnReviewed` | `{ playerId, turnIndex }`. A person confirmed a `needsReview` turn (`ConfirmTurn`) |
+| `GamePaused` / `GameResumed` | `{ reason: 'menu'\|'correction'\|'board-offline'\|'app-background'\|'review' }`. `review` holds the next turn until `TurnReviewed` (§6.4) |
+| `GameFinished` | `{ standings: { playerId, rank, score }[], provisional: true }`. Stays provisional while any `needsReview` turn has no `TurnReviewed` |
+| `SessionClosed` | `{ outcome: 'completed'\|'abandoned', finalStandings }`. `completed` is refused while any `needsReview` turn has no `TurnReviewed`; `abandoned` is always allowed |
 
-**Commands** (UI or companion → host): `StartSession`, `CorrectDart`, `VoidDart`, `AddDart`, `SkipTurn`, `Pause`, `Resume`, `Rematch`, `CloseSession`. Each carries a `commandId`, which becomes the resulting events' `causationId`. A retried command is therefore applied at most once.
+**Commands** (UI or companion → host): `StartSession`, `CorrectDart`, `VoidDart`, `AddDart`, `SkipTurn`, `ConfirmTurn{turnIndex}`, `Pause`, `Resume`, `Rematch`, `CloseSession`. Each carries a `commandId`, which becomes the resulting events' `causationId`. A retried command is therefore applied at most once.
 
 ### 7.6 Example: a detected S5 corrected to S1
 
@@ -636,7 +654,8 @@ Adding a game means **one folder plus one registry line**.
 | Situation | Behaviour |
 |---|---|
 | Darts 1–3 detected | `DartThrown` for the current player, `dartIndex` 0–2 |
-| `TakeoutFinished` | `TurnEnded{reason:'takeout'}`; pad missing darts per `missingDartsAreMisses` |
+| `TakeoutFinished` (observed) | `TurnEnded{reason:'takeout'}`; pad missing darts per `missingDartsAreMisses` |
+| `TakeoutFinished{inferred:true}` | `TurnEnded{reason:'takeout', needsReview:true}` with no padding, then the review pause (§6.4) |
 | Game returns `endTurn:'bust'` | Later darts in the visit are shown greyed and not scored. The turn ends at takeout |
 | Board offline mid-turn | `GamePaused{board-offline}`. After 5 s the UI offers *Enter manually*. On reconnect, resync (§6.4) |
 | Manual mode (no board) | Darts arrive as `DartAdded{reason:'manual-mode'}` from the W4 picker. Turn ends on "Next player" |
@@ -827,10 +846,14 @@ Game names are original placeholders.
  Takeout:   ┌───────────────────── REMOVE DARTS ─────── Next up: JO ─────────────┐
  Offline:   ┌──── ⚠ Board connection lost — reconnecting (try 3) [Enter manually]┐
  Review:    ┌──── ⚠ Turn 11 needs review — darts recovered after reconnect [Fix] ┐
+ Paused:    ┌──── ⏸ Board may have been cleared while offline — check turn 11 [Review]┐
  Stuck:     ┌──── ⛔ Board stuck in takeout — reset it in the Autodarts app [Enter manually]┐
 ```
 
 - `DartThrown` updates the dart list, plays the stage effect and sound. `TakeoutStarted` shows the banner. `TurnEnded` plays the next-player transition (≤ 600 ms).
+- **Needs review** (§6.4, owner decision R):
+  - *Review*: darts recovered within the same visit. Play goes on, and the banner stays until the turn is confirmed in W4.
+  - *Paused*: a takeout may have happened offline. Play stops, and the next player's turn starts only after someone confirms the turn in W4. Darts thrown meanwhile are held for that next turn.
 - **TV:** OK or Menu opens pause. "Fix" is one D-pad press away. Home → "Game paused" ✅[P8].
 - **Phone:** stage on top, standings as a chip row, dart list below.
 
@@ -856,6 +879,7 @@ Game names are original placeholders.
 
 - **Preview** dry-runs the replay with the proposed change, so consequences such as eliminations or a different winner are visible before applying.
 - **Apply** appends `DartCorrected`, `DartVoided` or `DartAdded`. Earlier turns are reachable for the whole session.
+- **Review mode** (opened from a needs-review banner): `recovered` darts are marked, and after an inferred takeout missing darts show as empty slots, not misses. **Confirm turn** sends `ConfirmTurn{turnIndex}` once the corrections are done, which also ends a review pause.
 - **Target:** the common fixes (wrong bed, miss ↔ hit, add a bounce-out) take **≤ 5 remote presses** from W3.
 
 ### W5 · Victory
@@ -874,6 +898,7 @@ Game names are original placeholders.
 
 - `GameFinished` is **provisional**. A correction can withdraw the victory and resume play.
 - `SessionClosed` is written, and stats committed, only when the players pick Rematch, New game or Menu.
+- While a turn still needs review, those actions open W4 for it first, because the host refuses to close the session as completed (§6.4). Quitting (abandon) always works.
 - The celebration can be skipped with OK after 1.5 s.
 
 ---
