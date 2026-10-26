@@ -1,7 +1,7 @@
 import { sameSegment, type Coords, type EventOf, type Segment } from '@arcade/event-schema';
 import type { NormalizedThrow, SegmentAnomaly } from '../normalize';
 import type { IdSource } from '../ports';
-import { isLifecycle, relate, takeoutBegins, type Snapshot } from './snapshot';
+import { MAX_DARTS_PER_VISIT, isLifecycle, relate, takeoutBegins, type Snapshot } from './snapshot';
 
 /**
  * Turns ID-less board snapshots into a reliable dart stream (ARCHITECTURE §6.2, §6.4,
@@ -283,7 +283,7 @@ export class VisitTracker {
       this.diffDuringTakeout(snap, out, 'resync');
     } else if (takeoutBegins(snap)) {
       // Status first: darts missing from a takeout are being removed, not withdrawn.
-      this.takeoutSeen(snap, out, 'resync');
+      this.takeoutSeen(snap, out, 'resync', awayMs);
     } else {
       this.diffOrInfer(out, T, 'resync');
     }
@@ -311,14 +311,18 @@ export class VisitTracker {
     }
     if (T.length >= K.length) {
       let unknown = 0;
+      let mismatched = false;
       for (let i = 0; i < K.length; i++) {
-        const r = relate(K[i] as KnownDart, T[i] as NormalizedThrow);
+        const k = K[i] as KnownDart;
+        const t = T[i] as NormalizedThrow;
+        const r = relate(k, t);
         if (r === 'other') return null;
         if (r === 'unknown') unknown++;
+        if (!k.coords !== !t.coords) mismatched = true;
       }
       // One re-read is the board changing its mind; several at once may as well be darts
-      // withdrawn and others thrown.
-      return { toKnown: positions(T.length, K.length), doubtful: unknown > 1 };
+      // withdrawn and others thrown; a dart that lost or gained its coordinates is not one we know.
+      return { toKnown: positions(T.length, K.length), doubtful: unknown > 1 || mismatched };
     }
     // Fewer darts: which ones went? Unchanged darts can be matched by segment in order; only the
     // last darts gone, and no other way to match, is plain.
@@ -406,7 +410,11 @@ export class VisitTracker {
     });
   }
 
-  /** Darts come off in any order during a takeout: never update or withdraw then. */
+  /**
+   * Darts come off in any order during a takeout: never update or withdraw then. After an
+   * outage, though, darts gone may not all have been pulled: the board may have called the
+   * takeout off, withdrawn a dart and begun another while we were away. They are kept, flagged.
+   */
   private diffDuringTakeout(snap: Snapshot, out: TrackerFact[], mode: ApplyMode): void {
     const K = this.s.known;
     const T = snap.throws;
@@ -422,7 +430,15 @@ export class VisitTracker {
       return;
     }
     if (T.length <= K.length) {
-      if (this.allKnown(T)) return; // partial removal
+      if (this.allKnown(T)) {
+        // A partial removal.
+        if (mode === 'resync') {
+          K.forEach((k, j) => {
+            if (!T.some((t) => relate(k, t) === 'same')) this.flagInDoubt(out, j);
+          });
+        }
+        return;
+      }
       this.finishTakeout(out, true);
       this.detectFrom(out, T, 0, true);
       return;
@@ -443,8 +459,12 @@ export class VisitTracker {
    * and we do not are darts we missed before the takeout. A list that is not this visit's
    * darts, or that both lacks known darts and has new ones, means we cannot tell what happened:
    * an inferred takeout.
+   *
+   * After an outage long enough to throw a dart and pull it (`MIN_UNSEEN_VISIT_MS`), a visit with
+   * room for another dart may also have had one we never saw, thrown and already pulled: then
+   * every dart of the visit is flagged.
    */
-  private takeoutSeen(snap: Snapshot, out: TrackerFact[], mode: ApplyMode): void {
+  private takeoutSeen(snap: Snapshot, out: TrackerFact[], mode: ApplyMode, awayMs?: number): void {
     const K = this.s.known;
     const T = snap.throws;
     const a = this.alignTakeout(T, mode);
@@ -458,8 +478,9 @@ export class VisitTracker {
     a.toKnown.forEach((j, i) => {
       if (j >= 0) K[j] = this.updated(out, K[j] as KnownDart, T[i] as NormalizedThrow, false);
     });
+    const unseenDartFits = mode === 'resync' && (awayMs === undefined || awayMs >= MIN_UNSEEN_VISIT_MS) && K.length + fresh < MAX_DARTS_PER_VISIT;
     K.forEach((_, j) => {
-      if (!kept.has(j)) this.flagInDoubt(out, j);
+      if (!kept.has(j) || unseenDartFits) this.flagInDoubt(out, j);
     });
     T.forEach((t, i) => {
       if (a.toKnown[i] === -1) this.detect(out, t, mode === 'resync');

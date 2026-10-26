@@ -323,10 +323,14 @@ describe('§6.4 resync and decision R', () => {
     expect(step(u, throwing(d('T20'), d('S1')), 'resync')).toEqual(['takeout-end inferred', 'detect 0:T20 recovered', 'detect 1:S1 recovered']);
   });
 
-  it('mid-takeout when the connection dropped, still taking out: nothing', () => {
+  it('mid-takeout when the connection dropped, still taking out: the darts gone are kept, flagged', () => {
+    // Pulled, most likely; but offline the board may have called the takeout off, withdrawn a
+    // dart and started another (chaos seed 1338), so they are kept pending review.
     const t = online();
     step(t, takeoutStarted(A, B, C));
-    expect(step(t, snap('Takeout in progress', 'Takeout started', [C]), 'resync')).toEqual([]);
+    expect(step(t, snap('Takeout in progress', 'Takeout started', [C]), 'resync')).toEqual(['update T20->T20 review', 'update T20->T20 review']);
+    expect(step(t, takeoutStarted(A, B, C), 'resync')).toEqual([]);
+    expect(t.state().known).toHaveLength(3);
   });
 
   it('a stuck takeout found on resync is reported as a takeout of the new visit', () => {
@@ -580,6 +584,18 @@ describe('a takeout first seen with darts already pulled: they were removed, not
     expect(step(t, takeoutStarted(X, Y, Z), 'resync', 3000)).toEqual(['detect 2:T18 recovered', 'takeout-start']);
   });
 
+  it.each([
+    // [known darts, away ms, facts] (chaos seeds 550, 673)
+    ['room for more, a long enough outage: a dart thrown and pulled meanwhile would be missing', [X], 3000, ['update T20->T20 review', 'takeout-start']],
+    ['room for more, an outage of unknown length', [X, Y], undefined, ['update T20->T20 review', 'update T19->T19 review', 'takeout-start']],
+    ['room for more, a blip too short to throw and pull a dart', [X], 1000, ['takeout-start']],
+    ['no room: three darts known', [X, Y, Z], 60_000, ['takeout-start']],
+  ] as const)('a takeout first seen after an outage, every known dart still in: %s', (_label, known, away, facts) => {
+    const t = online();
+    step(t, throwing(...known));
+    expect(step(t, takeoutStarted(...known), 'resync', away)).toEqual(facts);
+  });
+
   it('other darts in a takeout first seen: a visit ended offline, inferred', () => {
     const t = online();
     step(t, throwing(X, Y));
@@ -673,6 +689,18 @@ describe('each dart keeps its id when the board withdraws another (finding 2)', 
     ] as const)('%s', (_label, before, after, facts) => {
       const { last } = play(throwing(...before), throwing(...after));
       expect(last).toEqual(facts);
+    });
+
+    it('a dart without coordinates is never taken for a known dart that has them (chaos seeds 262, 890)', () => {
+      // The last visit's D13 in its takeout; offline the takeout ends and a new D13 lands, reported
+      // without coordinates.
+      const t = online();
+      step(t, throwing(d('D13', 0.1702, 0.9365)));
+      step(t, takeoutStarted(d('D13', 0.1702, 0.9365)));
+      expect(step(t, throwing(d('D13')), 'resync', 3000)).toEqual(['takeout-end inferred', 'detect 0:D13 recovered']);
+      // Two misses, one with coordinates; the board withdraws that one.
+      const { last } = play(throwing(d('M3', 0.95, 0.4)), throwing(d('M3', 0.95, 0.4), d('M3')), throwing(d('M3')));
+      expect(last).toEqual(['withdraw #1', 'update #2 MISS->MISS review']);
     });
 
     it('a dart flagged so stays flagged', () => {

@@ -248,6 +248,22 @@ function setTimeoutOn(rig: Rig, fn: () => void, ms: number): void {
   rig.sched.setTimeout(fn, ms);
 }
 
+describe('finding 2, without coordinates: the board removes a dart that is not the last one', () => {
+  it('the dart left is flagged pending review, never re-mapped silently', async () => {
+    const rig = await online({ board: { noCoordsRate: 1 } });
+    rig.board.throwDart({ segment: 'S1' });
+    await rig.sched.advance(300);
+    rig.board.throwDart({ segment: 'S5' });
+    await rig.sched.advance(300);
+    rig.board.withdraw(0);
+    await rig.sched.advance(300);
+    const [s1, s5] = ofType(rig.facts, 'DartDetected').map((f) => f.payload.throwId);
+    expect(ofType(rig.facts, 'DartWithdrawn').map((f) => f.payload.throwId)).toEqual([s1]);
+    expect([...pending(rig.facts)]).toEqual([s5]);
+    expect([...liveDarts(rig.facts)]).toEqual([[s5, 'S5']]);
+  });
+});
+
 describe('finding 4: a takeout called off with the same darts', () => {
   it('throwing(A) → (A,B) → takeout → called off → the board retracts B: B is withdrawn', async () => {
     const rig = await online();

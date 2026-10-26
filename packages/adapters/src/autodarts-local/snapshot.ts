@@ -76,7 +76,9 @@ interface DartLike {
  * - `same`: same segment, same place (or no coordinates to tell);
  * - `updated`: the board re-read this dart: new segment, nearly the same place;
  * - `other`: a different physical dart;
- * - `unknown`: different segment and no coordinates to tell an update from a new dart.
+ * - `unknown`: no coordinates to tell an update from a new dart (different segment), or only
+ *   one of the two has coordinates. A dart the board reports with coordinates is reported with
+ *   them every time, so a dart without them is not taken for it on its segment alone.
  */
 export function relate(known: DartLike, seen: DartLike): Relation {
   const seg = sameSegment(known.segment, seen.segment);
@@ -85,5 +87,6 @@ export function relate(known: DartLike, seen: DartLike): Relation {
     if (seg) return d <= SAME_DART_TOLERANCE ? 'same' : 'other';
     return d <= MOVED_DART_TOLERANCE ? 'updated' : 'other';
   }
+  if (known.coords || seen.coords) return 'unknown';
   return seg ? 'same' : 'unknown';
 }
