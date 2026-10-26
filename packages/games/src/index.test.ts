@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GAMES, gameById, type BaseView } from '.';
-import { aimingThrower, defaultNames, makePlayers, runSession } from './testing';
+import { aimingThrower, defaultNames, makePlayers, runOnHost, runSession } from './testing';
 
 const games = GAMES.map((game) => [game.manifest.id, game] as const);
 const MODULES = import.meta.glob<() => Promise<Record<string, unknown>>>('./*/module.ts');
@@ -63,6 +63,19 @@ describe.each(games)('%s', (id, game) => {
       expect(view).toMatchObject({ gameId: id, finished: true, current: null });
       expect(view.scoreboard).toHaveLength(count);
       expect(typeof view.headline).toBe('string');
+    }
+  });
+
+  it.each([1, 2, 3])("plays seeded game %i turn for turn the same through the engine's SessionHost", async (n) => {
+    for (const count of new Set([game.manifest.players.min, game.manifest.players.max])) {
+      const seed = `${id}-${n}-${count}`;
+      const spec = { players: makePlayers(defaultNames(count)), seed };
+      const harness = runSession(game, { ...spec, darts: aimingThrower(seed) });
+      const host = await runOnHost(game, { ...spec, darts: aimingThrower(seed), freeze: true });
+      expect(host.turns).toEqual(harness.turns);
+      expect(host.standings).toEqual(harness.standings);
+      expect(host.state).toEqual(harness.state);
+      expect(host.session.closed).toEqual({ outcome: 'completed', finalStandings: harness.standings });
     }
   });
 });

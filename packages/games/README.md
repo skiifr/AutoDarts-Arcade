@@ -22,9 +22,10 @@ Game modules for AutoDarts Arcade: pure rules that the engine folds the event lo
      pure code).
 2. **Add one line** to `GAMES` in `src/index.ts` (and its import). The registry test then
    checks the id is unique, the defaults parse, the folder has its rules and fixtures, and
-   that seeded random games run to a full ranking without mutating state.
-3. Run `yarn run check` and `yarn workspace @arcade/games coverage`. Every `module.ts` must
-   have **100 % branch coverage** from its own tests.
+   that seeded random games run to a full ranking without mutating state, the same turn for
+   turn through the engine's `SessionHost`.
+3. Run `yarn verify` and `yarn coverage`. Every `module.ts` must have **100 % branch
+   coverage** from its own tests; CI fails otherwise.
 
 ### A tiny example
 
@@ -130,13 +131,17 @@ export const GAMES = [
 
 ## Testing
 
-`src/testing/` stands in for the engine until the session host lands:
+`src/testing/` has two ways to play a session, with the same spec and the same result:
 
-- `runSession(game, { players, options, seed, darts })` plays init → `onDart` per dart →
-  `onTurnEnd` → `nextPlayer`, three darts a visit, padding short visits with misses and
-  honouring `endTurn`. `darts` is a list of visits or a function asked for each dart.
-  `freeze` and `roundTrip` check purity.
-- `playScript(game, fixture)` plays a fixture and returns named standings.
+- `runSession(game, { players, options, seed, darts })` is the fast, synchronous harness
+  for unit tests. It plays init → `onDart` per dart → `onTurnEnd` → `nextPlayer`, three
+  darts a visit, padding short visits with misses and honouring `endTurn`. `darts` is a
+  list of visits or a function asked for each dart. `freeze` and `roundTrip` check purity.
+- `runOnHost(game, spec)` plays it through the engine's `SessionHost` with a
+  `MemoryLogStore`, as a manual-mode session: an `AddDart{reason:'manual-mode'}` per dart
+  and a `SkipTurn` per visit. It also returns the event log. The headless runner uses it.
+- `playScript(game, fixture)` and `playScriptOnHost(game, fixture)` play a fixture and
+  return named standings.
 - `scoredDart`, `turnCtx` and `makePlayers` build inputs for calling a module directly.
 - `aimingThrower(seed)` is a seeded pub-level player who aims at the view's `targets`.
 
@@ -159,10 +164,13 @@ export const GAMES = [
 
 Visits are in throwing order and use labels `T20`, `D16`, `S5`, `25`, `BULL` and `MISS`. A
 short visit is padded with misses. `src/fixtures.test.ts` plays every fixture of every
-registered game.
+registered game through the harness and through the `SessionHost`, and the two must agree
+turn for turn.
 
-Fixtures for games that use the `Rng` (Siege) are recorded with the harness's generator
-(`createRng`, cyrb128 → sfc32). If the engine draws differently, re-record them.
+Both draw from the engine's generator (`createRng` from `@arcade/engine`), the one sessions
+run on, with `seed` as `SessionStarted.rngSeed`. So a Siege fixture replays the same waves
+in a real session. If the engine's generator ever changes, re-record the fixtures that use
+the `Rng`.
 
 ### Headless runner
 
@@ -170,8 +178,10 @@ Fixtures for games that use the `Rng` (Siege) are recorded with the harness's ge
 yarn play-headless --game countdown --players 2 --seed abc      # random game, seeded
 yarn play-headless --game cricket --script path/to/fixture.json  # replay a script, check "expect"
 yarn play-headless --game siege --players 3 -o difficulty=hard --record my-fixture.json
+yarn play-headless --game countdown --players 2 --log           # the event log, as JSON lines
 yarn play-headless --help
 ```
 
-`--record` saves any game as a fixture whose `expect` is the result it produced: check it by
-hand before you commit it.
+It plays through the engine's `SessionHost` (`runOnHost`), so every game it shows is a real
+session log, from `SessionStarted` to `SessionClosed`. `--record` saves any game as a
+fixture whose `expect` is the result it produced: check it by hand before you commit it.

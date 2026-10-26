@@ -1,7 +1,9 @@
 import type { GameModule } from '@arcade/engine';
 import { z } from 'zod';
+import type { PlayerRef } from '@arcade/event-schema';
 import { parseVisits } from './darts';
-import { runSession, type SessionResult } from './harness';
+import { runSession, type SessionResult, type SessionSpec } from './harness';
+import { runOnHost } from './host';
 import { makePlayers } from './players';
 
 /**
@@ -39,21 +41,38 @@ export interface FixtureRun<State = unknown, View = unknown> {
   standings: NamedStanding[] | null;
 }
 
-/** Plays a scripted session (fixture or headless-runner script) through the harness. */
+function scriptSpec(input: unknown, extra: { seed?: string }): SessionSpec {
+  const fixture = FixtureSchema.parse(input);
+  return {
+    players: makePlayers(fixture.players),
+    options: fixture.options,
+    seed: fixture.seed ?? extra.seed,
+    darts: parseVisits(fixture.visits),
+  };
+}
+
+function named<State, View>(players: readonly PlayerRef[], result: SessionResult<State, View>): FixtureRun<State, View> {
+  const nameOf = (id: string) => players.find((p) => p.playerId === id)!.displayName;
+  const standings = result.standings?.map((s) => ({ player: nameOf(s.playerId), rank: s.rank, score: s.score })) ?? null;
+  return { result, standings };
+}
+
+/** Plays a scripted session (a fixture or a headless-runner script) through the harness. */
 export function playScript<State, View>(
   game: GameModule<unknown, State, View>,
   input: unknown,
   extra: { seed?: string } = {},
 ): FixtureRun<State, View> {
-  const fixture = FixtureSchema.parse(input);
-  const players = makePlayers(fixture.players);
-  const result = runSession(game, {
-    players,
-    options: fixture.options,
-    seed: fixture.seed ?? extra.seed,
-    darts: parseVisits(fixture.visits),
-  });
-  const nameOf = (id: string) => players.find((p) => p.playerId === id)!.displayName;
-  const standings = result.standings?.map((s) => ({ player: nameOf(s.playerId), rank: s.rank, score: s.score })) ?? null;
-  return { result, standings };
+  const spec = scriptSpec(input, extra);
+  return named(spec.players, runSession(game, spec));
+}
+
+/** Plays a scripted session through the engine's `SessionHost` (`runOnHost`). */
+export async function playScriptOnHost<State, View>(
+  game: GameModule<unknown, State, View>,
+  input: unknown,
+  extra: { seed?: string } = {},
+): Promise<FixtureRun<State, View>> {
+  const spec = scriptSpec(input, extra);
+  return named(spec.players, await runOnHost(game, spec));
 }

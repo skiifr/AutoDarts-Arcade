@@ -1,4 +1,4 @@
-import type { Rng } from '@arcade/engine';
+import { createRng, type Rng } from '@arcade/engine';
 import {
   BOARD_NUMBERS_CLOCKWISE,
   INNER_BULL,
@@ -8,7 +8,6 @@ import {
   type Segment,
 } from '@arcade/event-schema';
 import type { DartSource } from './harness';
-import { createRng } from './rng';
 
 /**
  * A pub-level dart at `target` (1–20, or 25 for the bull): mostly the number, sometimes a

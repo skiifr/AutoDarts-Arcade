@@ -1,7 +1,6 @@
-import type { GameEffect, GameModule, ScoredDart, TurnCtx } from '@arcade/engine';
+import { createRng, type GameEffect, type GameModule, type ScoredDart, type TurnCtx } from '@arcade/engine';
 import { MISS, points, type PlayerId, type PlayerRef, type Segment, type Standing } from '@arcade/event-schema';
 import { testId } from './players';
-import { createRng } from './rng';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the harness runs any game
 export type AnyGame = GameModule<any, any, any>;
@@ -51,7 +50,8 @@ export interface TurnLog {
   playerId: PlayerId;
   name: string;
   darts: LoggedDart[];
-  endTurn: 'bust' | 'game-rule' | null;
+  /** Why the visit ended early. `'finished'` comes only from the host: the game ended without asking. */
+  endTurn: 'bust' | 'game-rule' | 'finished' | null;
   effects: GameEffect[];
   /** The game's view after the turn ended. */
   view: unknown;
@@ -76,9 +76,12 @@ function deepFreeze<T>(value: T): T {
 }
 
 /**
- * Plays a session the way the host will (ARCHITECTURE §8.3), standing in for the engine
- * until integration: init → onDart per dart → onTurnEnd → nextPlayer, three darts per
- * visit, honouring `endTurn`. Darts after an early end are logged but not scored.
+ * Plays a session in the order the host calls a game (ARCHITECTURE §8.3): init → onDart per
+ * dart → onTurnEnd → nextPlayer, three darts per visit, honouring `endTurn`. Darts after an
+ * early end are logged but not scored. It draws from the engine's `createRng`, the generator
+ * sessions run on, so a seed gives the same game here and through `runOnHost`. This is the
+ * fast, synchronous loop for unit tests; `runOnHost` plays the same spec through the real
+ * `SessionHost`.
  */
 export function runSession<State, View>(game: GameModule<unknown, State, View>, spec: SessionSpec): SessionResult<State, View>;
 export function runSession(game: AnyGame, spec: SessionSpec): SessionResult {

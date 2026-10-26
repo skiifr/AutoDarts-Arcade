@@ -4,4 +4,4 @@ import { register } from 'node:module';
 
 register('./resolve-ts.mjs', import.meta.url);
 const { main } = await import('./cli.ts');
-process.exitCode = main(process.argv.slice(2));
+process.exitCode = await main(process.argv.slice(2));
