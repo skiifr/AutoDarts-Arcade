@@ -59,8 +59,8 @@ function bannerFor(kind: ShellBanner, state: ShellState): BannerProps | null {
         tone: 'rose',
         icon: '⛔',
         title: 'Board stuck in takeout',
-        detail: 'A reset is only sent if Board control is turned on in Settings.',
-        action: { label: 'Dismiss', onPress: () => demo.setBanner('none') },
+        detail: 'Reset the board from the Autodarts app. Until then you can enter darts manually.',
+        action: { label: 'Enter manually', onPress: () => router.push({ pathname: '/fix', params: { add: '1' } }) },
       };
     case 'none':
       return null;

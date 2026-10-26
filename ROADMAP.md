@@ -29,6 +29,7 @@
 | **Q4** | GPL app-store exception? | **Not needed for private use.** You are the sole copyright holder, so the GPL doesn't restrict your own installs. Revisit only before accepting outside contributions or publishing (R07) |
 | **Q5** | Product name | **Keep "AutoDarts Arcade"** for home use. Revisit only if it's ever published (R08) |
 | **Q6** | Upgrade the detection host if the Pi 4 proves unreliable? | **Only after Phase 5, and only if proven.** P1–P5 must work on the current Pi 4. Evidence is collected throughout, and the **H1 hardware review** after P5 decides (see below) |
+| **S** | May the app ever write to the board (for example, reset a stuck takeout)? | **No.** The transport allows only GET `/api/state`, `/api/version`, `/api/state/stats`, `/api/cams/stats` and `WS /api/events`. A stuck takeout is reset from Autodarts' own app, and Arcade offers manual entry meanwhile (ARCHITECTURE §4.3, §6.3, §9.5) |
 
 ---
 
@@ -129,7 +130,7 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
   - `simulator`: scripted and random, including fault modes;
   - `manual`.
 - `packages/platform`:
-  - `Transport` with the **endpoint allowlist**;
+  - `Transport` with the **endpoint allowlist**: GET and the events WebSocket only, because the app never writes to the board (owner decision S);
   - `LogStore` (SQLite on Expo);
   - `Discovery`: mDNS, last-known, manual, probe.
 - Session host core: seq assignment, write-ahead persistence, crash-resume, raw-frame ring buffer, diagnostics export.
@@ -143,7 +144,7 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
   - **Zero** silent mismatches.
 - [ ] Resync completes ≤ 2 s after the board becomes reachable, measured with the fault proxy.
 - [ ] Killing the app mid-turn and relaunching restores the exact state. Resume ≤ 3 s on a Fire OS stick.
-- [ ] Allowlist test: any request outside the allowed endpoints fails the build.
+- [ ] Allowlist test: any request outside the allowed endpoints, or with any method other than GET, fails the build.
 - [ ] Idle load on the board ≤ 1 HTTP request per 5 s.
 
 **Tests:**
@@ -189,7 +190,7 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
   - the dartboard picker (SVG);
   - theme and player colours (colour-blind-safe palette).
 - Correction flow with **dry-run preview**; provisional results; "needs review" badges.
-- Player profiles (local), guests, settings (quality tier, house rules, board control opt-in).
+- Player profiles (local), guests, settings (quality tier, house rules).
 - Basic audio through `AudioPort`; keep-awake; Home → pause on TV.
 - **Demo mode** (simulator), for development and for trying games without the board.
 

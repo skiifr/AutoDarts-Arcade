@@ -128,7 +128,11 @@
 
 ### R13 · Stuck-takeout bug — 9 Medium
 - **Cause:** 2.0.2 can stick at "Takeout in progress" with no darts on the board 🟡[C12].
-- **Mitigation:** Detect after 8 s and show a banner. Reset only through the opt-in `POST /api/reset`. Re-check on each board version.
+- **Mitigation:**
+  - Detect after 8 s and show a banner telling the player to reset the board from Autodarts' own app.
+  - The banner offers *Enter manually*, so the game can go on meanwhile.
+  - Arcade never sends a reset, because it never writes to the board (owner decision S).
+  - Re-check on each board version.
 - **Owner:** Lead.
 
 ### R14 · iOS Local Network permission / ATS — 9 Medium

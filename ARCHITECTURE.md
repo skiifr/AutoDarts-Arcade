@@ -134,7 +134,7 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 | 0.x / 1.x (legacy) | Browser **Board Manager at `:3180`**. Root systemd unit. Board ID + API key. Keycloak login | ✅[S1] 🟡[C2] |
 | **2.0.0 → 2.0.2 stable**, 2.1.0-beta.5 | Board Manager UI removed. Autodarts Desktop or headless + `autodarts` CLI. **User** systemd unit. QR/short-code pairing. Velopack auto-update | ✅[S1][S6][S7] |
 | June 2026 | Keycloak retired. OAuth 2.0 (PKCE / device flow). `grant_type=password` ended | 🟡[C9] |
-| 2.0.2 bug | A takeout can stick at "Takeout in progress" with `numThrows: 0`. Darts are not counted until `POST /api/reset` | 🟡[C12] |
+| 2.0.2 bug | A takeout can stick at "Takeout in progress" with `numThrows: 0`. Darts are not counted until the board is reset | 🟡[C12] |
 
 **Builds**
 - Headless 2.0.2 is published for linux-arm64 and **linux-armv7l**, so the Pi 4 is still a published target ✅[S6].
@@ -163,13 +163,13 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 
 | Endpoint | Use in Arcade | Evidence |
 |---|---|---|
-| `WS /api/events` | **Yes.** Primary stream | 🟡[C1][C2][C10] |
+| `WS /api/events` | **Yes.** Primary stream. An optional `?type=state` query asks for `state` frames only 🔬 | 🟡[C1][C2][C10] |
 | `GET /api/state` | **Yes.** Snapshot on connect, idle liveness poll | 🟡[C2][C4] |
 | `GET /api/version` | Yes, to pick the adapter profile | 🟡[C2] |
 | `GET /api/state/stats`, `/api/cams/stats` | Optional, for health (FPS, CPU) | 🟡[C2] |
-| `POST /api/reset` | **Opt-in only**, to clear the stuck-takeout bug | 🟡[C2][C12] |
 | `GET /api/config`, `GET /api/system` | **Forbidden.** They return the board **API key** and **TLS key** | 🟡[C2] |
-| start/stop, calibration, restart, upstream connect, `PATCH /api/config` | **Forbidden.** They modify Autodarts | 🟡[C2] |
+| `WS /api/events/system` | **Forbidden.** Not needed, and what it carries is unchecked | ⚪ |
+| Anything that writes: reset, start/stop, calibration, restart, upstream connect, `PATCH /api/config` | **Forbidden.** **The app never writes to the board** (owner decision S). A stuck takeout is reset from Autodarts' own app (§6.3) | 🟡[C2] |
 
 **Frame envelope:** `{"type": "state" | "cam_state" | "motion_state" | "stats" | "cam_stats", "data": {…}}` 🟡[C1][C2].
 
@@ -434,7 +434,7 @@ for i in 0..max(len(throws), len(known))-1:
 | **User correction** | W4 sends commands: `CorrectDart` / `VoidDart` / `AddDart`. Host appends the event and replays. Any dart in the session is correctable, including after "game over" (results stay *provisional* until the next action). |
 | **Takeout** | `TakeoutFinished` ends the turn. On the 3rd dart (board status `Takeout`) the UI already shows "Remove darts". |
 | **Takeout with 0 darts** (hand in front of the cameras) | Ignored by default. A setting can make it count as "skip turn". |
-| **Stuck takeout** (2.0.2 bug 🟡[C12]) | `Takeout in progress` with no darts for > 8 s → banner "Board stuck. Reset board?" `POST /api/reset` is sent only if the user enabled *Board control* in settings. |
+| **Stuck takeout** (2.0.2 bug 🟡[C12]) | `Takeout in progress` with no darts for > 8 s → `BoardStatusChanged{status:'stuck-takeout'}` and a banner telling the player to reset the board from Autodarts' own app, with *Enter manually* as the way to keep playing. Arcade never sends a reset itself: it never writes to the board (owner decision S). |
 | **Darts already on the board at game start** | They are treated as baseline, not scored. The UI says "Clear the board to start". |
 | **Autodarts corrections in its own web UI** | Not applicable: Arcade sessions are not Autodarts matches. Don't run an Autodarts match at the same time (R26). |
 
@@ -696,9 +696,11 @@ Before release, names and mechanics are checked against BattleUp's catalogue so 
 
 ### 9.5 Security and privacy
 
-- **Endpoint allowlist in the transport.** Only `WS /api/events`, `GET /api/state`, `GET /api/version` and the stats endpoints are allowed, plus an opt-in `POST /api/reset`.
-  - A unit test fails the build if any other path appears.
-  - This blocks `/api/config` and `/api/system`, which return the board **API key and TLS key** 🟡[C2].
+- **Endpoint allowlist in the transport.** The app never writes to the board (owner decision S). Only these are allowed:
+  - `GET /api/state`, `/api/version`, `/api/state/stats` and `/api/cams/stats`;
+  - `WS /api/events`, optionally with `?type=state`.
+  - A unit test fails the build if any other path, or any method other than GET, appears.
+  - This blocks `/api/events/system`, and `/api/config` and `/api/system`, which return the board **API key and TLS key** 🟡[C2].
 - **No Autodarts credentials** are ever requested or stored.
 - **Player data** (names, avatars, stats) stays on-device. No accounts and no analytics in v1, so the App Store privacy label is "Data Not Collected".
 - **Diagnostic exports** (raw-frame ring buffer) are user-initiated through the share sheet and secret-free, because those endpoints are never fetched.
@@ -825,7 +827,7 @@ Game names are original placeholders.
  Takeout:   ┌───────────────────── REMOVE DARTS ─────── Next up: JO ─────────────┐
  Offline:   ┌──── ⚠ Board connection lost — reconnecting (try 3) [Enter manually]┐
  Review:    ┌──── ⚠ Turn 11 needs review — darts recovered after reconnect [Fix] ┐
- Stuck:     ┌──── Board stuck in takeout. [Reset board] (only if Board control on)┐
+ Stuck:     ┌──── ⛔ Board stuck in takeout — reset it in the Autodarts app [Enter manually]┐
 ```
 
 - `DartThrown` updates the dart list, plays the stage effect and sound. `TakeoutStarted` shows the banner. `TurnEnded` plays the next-player transition (≤ 600 ms).
