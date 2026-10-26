@@ -7,7 +7,7 @@
 > - TV target: **Fire TV Stick 4K Max (Fire OS)**.
 > - Distribution with no public store listings: **TestFlight** for iPhone and iPad (paid Apple Developer account); ADB sideload for Fire TV and Android.
 > - Detection host: the current **Raspberry Pi 4 through Phase 5**. An upgrade is considered only if the post-P5 **H1 hardware review** proves it's needed.
-> - See [ROADMAP Q1–Q7](ROADMAP.md#owner-decisions-answered-2026-10-26).
+> - See [ROADMAP Q1–Q6](ROADMAP.md#owner-decisions-answered-2026-10-26).
 > **Companion documents:** [ROADMAP.md](ROADMAP.md) · [RISK-REGISTER.md](RISK-REGISTER.md)
 
 ### Evidence legend
@@ -244,7 +244,6 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 | Tools for Autodarts [C9] | CC BY-NC 4.0 | Hooks the web app's socket | v2 match schema reference |
 | autodarts-board (npm) [C10] | MIT | Local WS | Small reusable TS client (MIT) |
 | Autodarts-TV [C11] | MIT | WebView around play.autodarts.com | Android TV precedent |
-| **ShedDarts** [C16] (owner's earlier attempt, private) | owner's own | Tried local `:3180`, with the wrong path and format | Lessons and game ideas (§4.8) |
 
 **Rule for this repo:** learn freely from protocols and ideas. **Copy code only from MIT/BSD/Apache sources, with notices.** Never copy code from NC, AGPL or unlicensed repos.
 
@@ -302,28 +301,6 @@ A per-session **board-health log** (§9.7) feeds the **H1 hardware review** afte
 | Rive | ✅ | ⚪ | ❌ | Not used |
 
 Reanimated's own guidance is no more than ~100 animated components on low-end Android ✅[P16].
-
-### 4.8 Lessons from ShedDarts (the owner's earlier attempt)
-
-`skiifr/ShedDarts` (private, last change Jan 2026) had three parts ✅[C16]:
-- a Python/FastAPI "brain" on a house PC;
-- a bridge to the board in the shed over Tailscale;
-- a D3 web UI on the iPad.
-
-It played an Around-the-World variant. **As written, it could not have scored real Autodarts frames.** The table shows why.
-
-| ShedDarts did | Problem | Arcade does instead |
-|---|---|---|
-| Connected to `ws://<ip>:3180` (root path) | The stream is at `/api/events` 🟡[C1][C2] | Endpoint allowlist, confirmed by the P1 probe |
-| Expected `{"event":"dart","data":{"number","section":"s/d/t"}}` | Autodarts sends `{"type":"state","data":{"throws":[{"segment":{…}}]}}` snapshots (§4.3). The check on a top-level `event` key never matched, so real frames were silently dropped | Snapshot-diff adapter (§6), built from **recorded fixtures of your board**, never from a guessed format. Unknown shapes raise a visible `SourceAnomaly` |
-| Moved to the next player after **every dart** | A visit is up to 3 darts and ends on takeout | Host-owned turn policy (§8.3) |
-| No miss handling, inner and outer bull merged, no undo, state only in memory | Hung on wall hits (per its README); lost the game on a server restart | Miss normalization, corrections by replay, write-ahead log |
-| Game logic on a separate always-on PC, reached over Tailscale | An extra machine plus VPN between the board and the screen | Logic runs on the TV or iPad. No extra machine |
-
-**Kept from ShedDarts**
-- The **NZ skip rule** for Around the World: single +1, double +2, treble +3, finish on bull. It becomes a game option (§8.4).
-- The clickable SVG dartboard, used both as the simulator and as the W4 correction picker.
-- The "Hub Upgrade" wishlist: game hub, auto-next on takeout, no-score for wall hits, announcer calls, profiles, career stats and leaderboards. These are mapped into ROADMAP P3–P6 and the backlog.
 
 ---
 
@@ -670,8 +647,7 @@ Adding a game means **one folder plus one registry line**.
 |---|---|---|
 | Countdown (x01 variant) | classic | Reference implementation and rules test bed |
 | Cricket | classic | Exercises marks, closing and points rules |
-| Around the World | practice / party | Simplest module and the engine tutorial. Includes the **NZ skip rule** from ShedDarts as an option (§4.8) |
-| Killer | classic / party | Elimination with lives. From the ShedDarts wishlist |
+| Around the Clock | practice | Simplest module, used for the engine tutorial |
 | **Siege** | party | Targets carry numbers. Exercises stage animation and spawn RNG |
 | **Territory** | party | Claim segments. Exercises board-map rendering and steals |
 | **Balloon Pop** | party | Exercises fast effects and the effect-queue collapse |
@@ -717,14 +693,6 @@ Before release, names and mechanics are checked against BattleUp's catalogue so 
 3. **Manual IP** entry, with a QR code shown on a phone for TV.
 4. **Subnet probe** of `:3180/api/version`, opt-in.
 5. **Demo mode**: the simulator adapter, for development and for playing without the board. It would also satisfy App Review ✅[P21] if the app is ever published.
-
-**Network path (ROADMAP Q7).** The design assumes the board and the display share one network, i.e. the shed's Wi-Fi or LAN.
-
-If the board is only reachable over **Tailscale** (as in ShedDarts):
-- The app connects to the board's Tailscale IP or MagicDNS name, entered manually, because mDNS doesn't cross the tunnel.
-- Tailscale runs on iOS and on Fire devices, installed from the Amazon Appstore ✅[P28].
-- Same-network is still preferred: lower latency, and no VPN that must stay connected on the TV.
-- P1 measures latency on the real path.
 
 ### 9.5 Security and privacy
 
@@ -922,7 +890,6 @@ Game names are original placeholders.
 | Board needs the internet at start | ✅[S4] (v1 FAQ) / 🟡 for v2 → 🔬 |
 | Pi 4 marginal for detection; don't render on it | ✅[S4] |
 | Your Pi 4's actual CPU, thermal and FPS headroom | 🔬 P1 baseline → H1 review after P5 |
-| Board and display on the same network (vs Tailscale, as in ShedDarts) | ⚪ → Q7, 🔬 P1 |
 | ToS bans unauthorised third-party / commercial use | ✅[S3] |
 | Autodarts staff permit this project for private home use | **Owner-attested** (Autodarts Discord); not independently verified |
 | Your TV stick (4K Max) runs Fire OS and accepts ADB sideloading | ✅[P1][P26] → 🔬 install dry run in P1 |
@@ -972,7 +939,6 @@ All sources accessed 2026-10-26. The decision-critical ones (S1, S3, S4, P1, P4,
 - [C13] "No OAuth client IDs to third parties": https://github.com/Dennis-Otto/ha-autodarts/pull/440
 - [C14] Pi 4 field report (German): https://www.dartn-forum.de/thread/31106-autodarts-technische-fragen-zur-installation/
 - [C15] mDNS on BM 2: https://github.com/Dennis-Otto/HACSAutodarts/pull/10
-- [C16] ShedDarts (owner's earlier attempt, private; reviewed at commit `cc9cff5`): https://github.com/skiifr/ShedDarts
 
 **Platforms**
 - [P1] Fire TV stick specs: https://developer.amazon.com/docs/device-specs/device-specifications-fire-tv-streaming-media-player.html
@@ -1002,4 +968,3 @@ All sources accessed 2026-10-26. The decision-critical ones (S1, S3, S4, P1, P4,
 - [P25] Signal's GPLv3 app-store exception: https://scancode-licensedb.aboutcode.org/signal-gpl-3.0-exception.LICENSE
 - [P26] Amazon, connect to Fire TV through ADB (Developer Options, ADB debugging, Apps from Unknown Sources): https://developer.amazon.com/docs/fire-tv/connecting-adb-to-device.html
 - [P27] Apple TestFlight (up to 100 internal testers): https://developer.apple.com/testflight/. The 90-day build lifetime and "no review for internal testers" come from third-party guides such as https://instabug.com/blog/testflight-guide 🟡
-- [P28] Tailscale on Amazon Fire devices (Amazon Appstore): https://tailscale.com/kb/1394/install-amazon-fire
