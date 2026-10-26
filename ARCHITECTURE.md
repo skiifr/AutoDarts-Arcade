@@ -1,6 +1,6 @@
 # AutoDarts Arcade — Architecture (Phase 0)
 
-> **Status:** Phase 0 deliverable. This is research and architecture only, and no application code exists yet.
+> **Status:** Phase 0 design, now being built. [README.md](README.md) says what exists so far.
 > **Research date:** 2026-10-26. Autodarts changed substantially in 2026, so re-check anything marked 🟡 or ⚪ before relying on it.
 > **Confirmed scope (owner, 2026-10-26):**
 > - **Private home use**, non-commercial. The owner reports that Autodarts staff permitted this via their Discord.
@@ -163,7 +163,7 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 
 | Endpoint | Use in Arcade | Evidence |
 |---|---|---|
-| `WS /api/events` | **Yes.** Primary stream. An optional `?type=state` query asks for `state` frames only 🔬 | 🟡[C1][C2][C10] |
+| `WS /api/events` | **Yes.** Primary stream, opened on the bare path by default with frames filtered by `type`, as in HomeDarts and DartLab's real 2.0.2 capture 🟡[C2][C3]. `?type=state` (`state` frames only) is optional. It comes from the owner's static inspection of the 2.0.2 binary and is unconfirmed until HC1 🔬 | 🟡[C1][C2][C3][C10] |
 | `GET /api/state` | **Yes.** Snapshot on connect, idle liveness poll | 🟡[C2][C4] |
 | `GET /api/version` | Yes, to pick the adapter profile | 🟡[C2] |
 | `GET /api/state/stats`, `/api/cams/stats` | Optional, for health (FPS, CPU) | 🟡[C2] |
@@ -359,7 +359,11 @@ autodarts-arcade/
 ├─ apps/
 │  ├─ arcade/            Expo app → iOS, iPadOS, Android, Fire OS (EXPO_TV build profile)
 │  ├─ vega/              React Native for Vega shell (backlog; only if a Vega stick is added)
-│  └─ devtools/          Node CLIs: board-probe, frame-recorder, fault-proxy, headless game runner
+│  └─ devtools/          Node CLIs
+│     ├─ fake-board/     simulated Autodarts board on :3180 (adapters' board model)
+│     ├─ fault-proxy/    drops, duplicates, delays and cuts board → app frames
+│     ├─ headless-runner/ plays any game through the engine's SessionHost (`yarn play-headless`)
+│     └─ …               board-probe, frame-recorder (HC1)
 ├─ packages/
 │  ├─ event-schema/      zod types + generated JSON Schema, versioned (arcade.event/v1)
 │  ├─ engine/            session host, event log, fold/replay, turn policy (pure TS, no React)
@@ -444,8 +448,12 @@ for i in 0..max(len(throws), len(known))-1:
 ```
  CONNECTING ──open──▶ RESYNCING ──snapshot diffed──▶ ONLINE ──socket error / liveness fail──▶ OFFLINE
      ▲                                                                                          │
-     └────────────── backoff: 0.5 s, 1, 2, 4, then 5 s cap, ±20 % jitter ───────────────────────┘
+     └────── backoff: 0.25 s, 0.5, then every 0.75 s, ±20 % jitter · 5 s cap after 3 refusals ──┘
 ```
+
+**Socket.** The adapter opens `WS /api/events` on the bare path by default and keeps only the frame types it needs, as HomeDarts does and as DartLab's real 2.0.2 capture shows 🟡[C2][C3]. `?type=state` is optional. It comes from the owner's static inspection of the 2.0.2 binary and stays unconfirmed until HC1 🔬.
+
+**Backoff.** The adapter retries after 0.25 s and 0.5 s, then every 0.75 s with ±20 % jitter, so at most 0.9 s passes between attempts. Each connection attempt times out after 1 s, and each poll after 2 s. The 5 s cap applies only after the board answers but refuses three times in a row, which keeps a misbehaving board light. The adapter's timing tests measure the worst case from reachable to online: 0.81 s when attempts fail fast, and 1.59 s when they hang until their timeout. That is inside NF5's 2 s, in simulation; HC1 measures it on the real board 🔬. The first sketch (0.5 s, 1, 2, 4, then a 5 s cap) could wait 5 s, so it could not meet NF5.
 
 **Liveness.** The socket is silent when idle 🟡, so the adapter polls `GET /api/state` every 5 s with no frames. Two failed polls → `OFFLINE`. Each poll result is also diffed, which makes the stream **self-healing** if a frame was ever missed.
 
@@ -909,9 +917,10 @@ Game names are original placeholders.
 |---|---|
 | Autodarts 2.x removed the `:3180` Board Manager UI; local API undocumented | ✅[S1] |
 | Local `ws://:3180/api/events` still streams throws on 2.x | 🟡 disputed ([C2][C3] yes, [C4] no) → **🔬 HC1 gate (G1)** |
+| The events socket works on the bare path, frames filtered by `type`; `?type=state` is optional | 🟡[C2][C3] (bare path, real 2.0.2 capture); `?type=state` from the owner's static inspection of the 2.0.2 binary only → 🔬 HC1 · **sim** |
 | Local API needs no auth | 🟡[C2][C3] → 🔬 |
-| Frame field names, enums, miss shapes, coords convention | 🟡[C1][C2][C3] → 🔬 recorded fixtures |
-| Board withdraws or updates darts in place | 🟡[C2] → 🔬 |
+| Frame field names, enums, miss shapes, coords convention | 🟡[C1][C2][C3] → 🔬 recorded fixtures · **sim** (community fixtures, golden output) |
+| Board withdraws or updates darts in place | 🟡[C2] → 🔬 · **sim** |
 | `/api/config` and `/api/system` expose secrets | 🟡[C2] (never called) |
 | mDNS `_autodarts-board._tcp` on 2.x | 🟡[C15] → 🔬 |
 | Board needs the internet at start | ✅[S4] (v1 FAQ) / 🟡 for v2 → 🔬 |
@@ -928,8 +937,10 @@ Game names are original placeholders.
 | Vega ships Reanimated 4.1.3, SVG, Lottie, AsyncStorage; no Skia or mDNS | ✅[P4] |
 | Vega app can open `ws://` to a LAN IP | ⚪ (backlog; not needed for the 4K Max) |
 | Effects hit Amazon KPIs on the 4K Max | ⚪ → 🔬 Phase 5 |
-| Full-log refold ≲ 5 ms on TV-class CPU | ⚪ → Phase 3 benchmark |
+| Full-log refold ≲ 5 ms on TV-class CPU | ⚪ → Phase 3 benchmark · **sim** (benchmark runs in Node; not yet on the stick) |
 | Board→screen ≤ 150 ms | ⚪ target → 🔬 |
+
+**sim**: the merged code covers this, and its tests pass in simulation (the simulator, the fake board, the community fixtures, benchmarks in Node). That is not evidence from hardware, so the mark is unchanged. Only HC1 can make it ✅.
 
 ---
 
