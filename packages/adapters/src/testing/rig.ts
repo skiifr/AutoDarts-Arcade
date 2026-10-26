@@ -1,6 +1,7 @@
 import type { BoardFactDraft } from '@arcade/event-schema';
 import { AutodartsLocalAdapter, type AdapterTiming, type AutodartsLocalOptions } from '../autodarts-local/adapter';
 import type { VisitState } from '../autodarts-local/visit-tracker';
+import type { Transport } from '../ports';
 import { createUlidSource, seededRandom } from '../random';
 import { BoardModel, type BoardModelOptions } from '../simulator/board-model';
 import { FakeBoardTransport, type FaultPlan } from '../simulator/fake-transport';
@@ -33,6 +34,9 @@ export interface RigOptions {
   /** Validate every emitted draft against the event schema (default true). */
   validate?: boolean;
   observer?: AutodartsLocalOptions['observer'];
+  onListenerError?: AutodartsLocalOptions['onListenerError'];
+  /** Put a test transport between the adapter and the fake one (`rig.transport` stays the fake one). */
+  wrapTransport?: (inner: FakeBoardTransport) => Transport;
 }
 
 export function makeRig(options: RigOptions = {}): Rig {
@@ -46,7 +50,7 @@ export function makeRig(options: RigOptions = {}): Rig {
   const ids = createUlidSource({ now: () => EPOCH + sched.now(), random: seededRandom(`ids:${String(seed)}`) });
   const clock = (): string => isoFromEpochMs(EPOCH + sched.now());
   const adapter = new AutodartsLocalAdapter({
-    transport,
+    transport: options.wrapTransport ? options.wrapTransport(transport) : transport,
     scheduler: sched,
     clock,
     ids,
@@ -55,6 +59,7 @@ export function makeRig(options: RigOptions = {}): Rig {
     timing: options.timing,
     stateOnlySocket: options.stateOnlySocket,
     observer: options.observer,
+    onListenerError: options.onListenerError,
   });
   const facts: BoardFactDraft[] = [];
   const timed: { at: number; fact: BoardFactDraft }[] = [];

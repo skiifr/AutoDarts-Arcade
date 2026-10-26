@@ -1,6 +1,6 @@
 import type { BoardFactDraft, EventSource } from '@arcade/event-schema';
 import type { BoardGetPath } from '../endpoints';
-import { Listeners, type BoardSource, type Clock, type EventsSocket, type FactListener, type IdSource, type RandomSource, type Scheduler, type TimerHandle, type Transport } from '../ports';
+import { Listeners, type BoardSource, type Clock, type EventsSocket, type FactListener, type HttpResponse, type IdSource, type RandomSource, type Scheduler, type TimerHandle, type Transport } from '../ports';
 import { MAX_FRAME_CHARS, excerpt, parseEventFrame, parseStateBody } from '../raw';
 import { RawFrameRing, type RawChannel } from '../ring-buffer';
 import { toSnapshot, type Snapshot } from './snapshot';
@@ -83,7 +83,18 @@ export interface AutodartsLocalOptions {
   ring?: RawFrameRing;
   /** Test and diagnostics hook, called before each snapshot is applied. */
   observer?: { beforeApply?(snapshot: Snapshot, mode: ApplyMode): void };
+  /**
+   * Where an error thrown by a fact or status listener goes. It never unwinds the adapter.
+   * Default: reported as an uncaught error, asynchronously.
+   */
+  onListenerError?: (err: unknown) => void;
 }
+
+/**
+ * A request the transport has not settled this long after its own timeout is abandoned (the
+ * attempt fails and is retried): the adapter never waits on a transport that broke its promise.
+ */
+export const REQUEST_WATCHDOG_SLACK_MS = 1000;
 
 const MAX_DISTINCT_ANOMALIES = 64;
 const MAX_CONFIRM_ROUNDS = 2;
@@ -99,8 +110,8 @@ export class AutodartsLocalAdapter implements BoardSource {
 
   private readonly o: AutodartsLocalOptions;
   private readonly t: AdapterTiming;
-  private readonly facts = new Listeners<BoardFactDraft>();
-  private readonly statusListeners = new Listeners<ConnectionStatus>();
+  private readonly facts: Listeners<BoardFactDraft>;
+  private readonly statusListeners: Listeners<ConnectionStatus>;
   private readonly tracker: VisitTracker;
 
   private phase: ConnectionPhase = 'stopped';
@@ -132,6 +143,8 @@ export class AutodartsLocalAdapter implements BoardSource {
   constructor(options: AutodartsLocalOptions) {
     this.o = options;
     this.t = { ...DEFAULT_TIMING, ...options.timing };
+    this.facts = new Listeners<BoardFactDraft>(options.onListenerError);
+    this.statusListeners = new Listeners<ConnectionStatus>(options.onListenerError);
     this.ring = options.ring ?? new RawFrameRing();
     this.tracker = new VisitTracker(options.ids, options.restored);
   }
@@ -309,17 +322,18 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.teardown();
     this.phase = 'offline';
     this.refusedInARow = refused ? this.refusedInARow + 1 : 0;
-    this.emitConnection('offline', error);
     const n = this.attempt;
     const base =
       this.refusedInARow >= this.t.refusedAfter
         ? this.t.refusedBackoffMs
         : (this.t.backoffMs[Math.min(n - 1, this.t.backoffMs.length - 1)] ?? 1000);
     const delay = Math.max(0, base * (1 + (this.o.random() * 2 - 1) * this.t.jitter));
+    // The retry is armed before anyone hears about the failure.
     this.connectTimer = this.o.scheduler.setTimeout(() => {
       this.connectTimer = null;
       this.connect(n + 1);
     }, delay);
+    this.emitConnection('offline', error);
   }
 
   private connectionLost(error: string): void {
@@ -327,11 +341,11 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.teardown();
     this.phase = 'offline';
     this.attempt = 0;
-    this.emitConnection('offline', error);
     this.connectTimer = this.o.scheduler.setTimeout(() => {
       this.connectTimer = null;
       this.connect(1);
     }, this.t.reconnectAfterLossMs);
+    this.emitConnection('offline', error);
   }
 
   private teardown(): void {
@@ -439,10 +453,37 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.requestPoll();
   }
 
+  /** A GET bounded twice: by the transport's timeout and, should it never settle, by a watchdog. */
   private get(path: BoardGetPath, gen: number, timeoutMs = this.t.requestTimeoutMs): Promise<{ status: number; body: string }> {
-    return this.o.transport.get(path, { timeoutMs }).then((res) => {
-      if (gen === this.gen) this.record(`GET ${path}`, res.body);
-      return res;
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const watchdog = this.o.scheduler.setTimeout(() => {
+        if (done) return;
+        done = true;
+        reject(new Error(`no answer to GET ${path} within ${timeoutMs + REQUEST_WATCHDOG_SLACK_MS} ms`));
+      }, timeoutMs + REQUEST_WATCHDOG_SLACK_MS);
+      const settle = (): boolean => {
+        if (done) return false;
+        done = true;
+        this.o.scheduler.clearTimeout(watchdog);
+        return true;
+      };
+      let request: Promise<HttpResponse>;
+      try {
+        request = this.o.transport.get(path, { timeoutMs });
+      } catch (err) {
+        request = Promise.reject(err);
+      }
+      request.then(
+        (res) => {
+          if (!settle()) return;
+          if (gen === this.gen) this.record(`GET ${path}`, res.body);
+          resolve(res);
+        },
+        (err: unknown) => {
+          if (settle()) reject(err);
+        },
+      );
     });
   }
 

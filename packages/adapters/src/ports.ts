@@ -70,9 +70,30 @@ export interface BoardSource {
   subscribe(listener: FactListener): () => void;
 }
 
-/** Small listener set shared by the sources. */
+/** Reports an error outside the current call stack (as an uncaught error), without unwinding it. */
+export function reportLater(err: unknown): void {
+  const queue = (globalThis as { queueMicrotask?: (task: () => void) => void }).queueMicrotask;
+  if (queue) {
+    queue(() => {
+      throw err;
+    });
+  } else {
+    void Promise.reject(err);
+  }
+}
+
+/**
+ * Small listener set shared by the sources. A listener that throws never reaches the emitter:
+ * the source's own state machine (timers, retries) must not unwind half-way because a
+ * subscriber failed. The error goes to `onError` (default: reported as uncaught, later).
+ */
 export class Listeners<T> {
   private readonly set = new Set<(value: T) => void>();
+  private readonly onError: (err: unknown) => void;
+
+  constructor(onError: (err: unknown) => void = reportLater) {
+    this.onError = onError;
+  }
 
   add(listener: (value: T) => void): () => void {
     this.set.add(listener);
@@ -82,7 +103,13 @@ export class Listeners<T> {
   }
 
   emit(value: T): void {
-    for (const listener of [...this.set]) listener(value);
+    for (const listener of [...this.set]) {
+      try {
+        listener(value);
+      } catch (err) {
+        this.onError(err);
+      }
+    }
   }
 
   get size(): number {
