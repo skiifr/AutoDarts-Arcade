@@ -134,6 +134,7 @@ export class BoardModel {
   private running = true;
   private stuck = false;
   private changes = 0;
+  private callOffs = 0;
 
   constructor(options: BoardModelOptions) {
     this.random = options.random;
@@ -169,6 +170,11 @@ export class BoardModel {
 
   get isStuck(): boolean {
     return this.stuck;
+  }
+
+  /** How many takeouts were called off (ground truth for the chaos suite). */
+  get calledOffTakeouts(): number {
+    return this.callOffs;
   }
 
   get currentStatus(): string {
@@ -327,6 +333,7 @@ export class BoardModel {
     if (this.status !== 'Takeout in progress' || this.stuck || !startedWith || startedWith.length === 0 || startedWith.length !== this.list.length) return false;
     this.takeoutList = null;
     this.status = this.list.length >= 3 ? 'Takeout' : 'Throw';
+    this.callOffs++;
     this.changed();
     this.motion(false);
     return true;

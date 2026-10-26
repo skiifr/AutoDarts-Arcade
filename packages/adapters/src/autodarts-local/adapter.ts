@@ -100,8 +100,8 @@ export interface AutodartsLocalOptions {
   timing?: Partial<AdapterTiming>;
   /** Diagnostics buffer; one is created when omitted. */
   ring?: RawFrameRing;
-  /** Test and diagnostics hook, called before each snapshot is applied. */
-  observer?: { beforeApply?(snapshot: Snapshot, mode: ApplyMode): void };
+  /** Test and diagnostics hooks, called before and after each snapshot is applied. */
+  observer?: { beforeApply?(snapshot: Snapshot, mode: ApplyMode): void; afterApply?(snapshot: Snapshot, mode: ApplyMode): void };
   /**
    * Where an error thrown by a fact or status listener goes. It never unwinds the adapter.
    * Default: reported as an uncaught error, asynchronously.
@@ -680,6 +680,7 @@ export class AutodartsLocalAdapter implements BoardSource {
       const facts = this.tracker.apply(snap, mode, awayMs);
       for (const f of facts) this.emitTrackerFact(f, correlationId);
       this.handleStatus(snap, correlationId);
+      this.o.observer?.afterApply?.(snap, mode);
     });
   }
 
