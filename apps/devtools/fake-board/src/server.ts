@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   BOARD_EVENTS_PATH,
+  BOARD_GET_PATHS,
   BoardModel,
   SCENARIOS,
   runScenario,
@@ -41,6 +42,21 @@ export interface FakeBoard {
   close(): Promise<void>;
 }
 
+/**
+ * Permissive CORS on the read routes, so the browser preview (another origin, such as
+ * http://localhost:8081) can read this fake board. A real board probably sends no CORS
+ * headers, so the web preview works only against this tool; native apps are not subject
+ * to CORS. Browsers do not apply CORS to WebSockets.
+ */
+const CORS_HEADERS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET',
+  'access-control-allow-headers': 'accept',
+  'access-control-max-age': '600',
+} as const;
+
+const READ_ROUTES: ReadonlySet<string> = new Set(BOARD_GET_PATHS);
+
 const realScheduler: Scheduler = {
   setTimeout: (fn, ms) => setTimeout(fn, ms),
   clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
@@ -62,8 +78,8 @@ export async function startFakeBoard(options: FakeBoardOptions = {}): Promise<Fa
   let online = true;
   const sockets = new Set<WebSocket>();
 
-  const send = (res: ServerResponse, status: number, type: string, body: string): void => {
-    res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
+  const send = (res: ServerResponse, status: number, type: string, body: string, cors = false): void => {
+    res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...(cors ? CORS_HEADERS : {}) });
     res.end(body);
   };
 
@@ -73,6 +89,12 @@ export async function startFakeBoard(options: FakeBoardOptions = {}): Promise<Fa
       req.socket.destroy();
       return;
     }
+    if (req.method === 'OPTIONS' && READ_ROUTES.has(url.pathname)) {
+      // A browser's CORS preflight. It only ever allows GET, so it opens no way to write.
+      res.writeHead(204, { ...CORS_HEADERS, 'access-control-allow-private-network': 'true' });
+      res.end();
+      return;
+    }
     if (req.method !== 'GET') {
       log(`refused ${req.method} ${url.pathname} (the fake board is read-only)`);
       send(res, 405, 'text/plain', 'method not allowed');
@@ -80,16 +102,16 @@ export async function startFakeBoard(options: FakeBoardOptions = {}): Promise<Fa
     }
     switch (url.pathname) {
       case '/api/state':
-        send(res, 200, 'application/json', board.stateJson());
+        send(res, 200, 'application/json', board.stateJson(), true);
         return;
       case '/api/version':
-        send(res, 200, 'text/plain', board.versionText());
+        send(res, 200, 'text/plain', board.versionText(), true);
         return;
       case '/api/state/stats':
-        send(res, 200, 'application/json', board.statsJson());
+        send(res, 200, 'application/json', board.statsJson(), true);
         return;
       case '/api/cams/stats':
-        send(res, 200, 'application/json', board.camsStatsJson());
+        send(res, 200, 'application/json', board.camsStatsJson(), true);
         return;
       default:
         log(`not served: GET ${url.pathname}`);

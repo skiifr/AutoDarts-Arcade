@@ -37,6 +37,32 @@ describe('fake board', () => {
     expect((await fetch(`${base}/api/reset`, { method: 'POST' })).status).toBe(405);
   });
 
+  it('lets the browser preview read it cross-origin, and only with GET', async () => {
+    fb = await startFakeBoard({ port: 0, host: '127.0.0.1', scenario: 'idle' });
+    const base = `http://127.0.0.1:${fb.port}`;
+    const origin = { origin: 'http://localhost:8081' };
+    for (const path of ['/api/state', '/api/version', '/api/state/stats', '/api/cams/stats']) {
+      const res = await fetch(`${base}${path}`, { headers: origin });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    }
+    const preflight = await fetch(`${base}/api/state`, {
+      method: 'OPTIONS',
+      headers: { ...origin, 'access-control-request-method': 'GET', 'access-control-request-headers': 'accept' },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('access-control-allow-methods')).toBe('GET');
+
+    // Nothing else is opened up: other paths get no CORS headers, and writes stay refused.
+    const config = await fetch(`${base}/api/config`, { headers: origin });
+    expect(config.status).toBe(404);
+    expect(config.headers.get('access-control-allow-origin')).toBeNull();
+    const reset = await fetch(`${base}/api/reset`, { method: 'POST', headers: origin });
+    expect(reset.status).toBe(405);
+    expect(reset.headers.get('access-control-allow-origin')).toBeNull();
+    expect((await fetch(`${base}/api/reset`, { method: 'OPTIONS', headers: origin })).status).toBe(405);
+  });
+
   it('streams a visit to the adapter, and the adapter resyncs after a dropped connection', async () => {
     fb = await startFakeBoard({ port: 0, host: '127.0.0.1', scenario: 'idle' });
     const board = fb.board;
