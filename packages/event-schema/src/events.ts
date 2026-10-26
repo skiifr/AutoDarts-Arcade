@@ -120,9 +120,12 @@ export const SourceConnectionChanged = defineEvent(
   }),
 );
 
+/** Longest `SourceAnomaly.note`: a diagnostic sentence, not a dump (the raw data goes in `rawExcerpt`). */
+export const SOURCE_ANOMALY_NOTE_MAX = 500;
+
 export const SourceAnomaly = defineEvent(
   'SourceAnomaly',
-  z.object({ rawExcerpt: z.string().max(2000), note: z.string() }),
+  z.object({ rawExcerpt: z.string().max(2000), note: z.string().max(SOURCE_ANOMALY_NOTE_MAX) }),
 );
 
 // ── Layer 2: game facts (from the host; recorded at append time) ────────────

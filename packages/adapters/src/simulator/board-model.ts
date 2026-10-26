@@ -27,6 +27,10 @@ export interface Detection {
   phantom: boolean;
   /** The board retracted it while it was still in the visit. */
   withdrawn: boolean;
+  /** Pulled out during a takeout before the takeout finished (it still counts for its visit). */
+  pulled?: boolean;
+  /** The board reports this dart without coordinates, in every frame (bounce-outs may carry none 🟡). */
+  noCoords?: boolean;
   physicalId?: number;
   /** Every reading the board reported for it, oldest first (ground truth for the chaos suite). */
   history: { segment: Segment; coords: Coords }[];
@@ -67,8 +71,13 @@ export interface BoardModelOptions {
   cameras?: number;
   /** Also emit `motion_state` frames around takeouts, as HomeDarts' recordings show. */
   noiseFrames?: boolean;
-  /** Add `"_simVisit": <visit index>` to every state (the adapter ignores unknown fields). */
+  /**
+   * Add `"_simVisit": <visit index>` to every state and `"_simDet": <detection id>` to every
+   * listed dart (the adapter ignores unknown fields).
+   */
   annotate?: boolean;
+  /** The fraction of detections the board reports without coordinates (default 0). */
+  noCoordsRate?: number;
 }
 
 export function rawSegmentOf(seg: Segment, missStyle: 'outside' | 'bare' = 'outside'): RawSegmentOut {
@@ -114,14 +123,18 @@ export class BoardModel {
   private readonly cameras: number;
   private readonly noiseFrames: boolean;
   private readonly annotate: boolean;
+  private readonly noCoordsRate: number;
   private readonly frames = new Listeners<string>();
 
   private list: Detection[] = [];
+  /** The darts listed when the current takeout began (null outside a takeout). */
+  private takeoutList: Detection[] | null = null;
   private status = 'Throw';
   private event = 'Started';
   private running = true;
   private stuck = false;
   private changes = 0;
+  private callOffs = 0;
 
   constructor(options: BoardModelOptions) {
     this.random = options.random;
@@ -132,6 +145,7 @@ export class BoardModel {
     this.cameras = options.cameras ?? 3;
     this.noiseFrames = options.noiseFrames ?? false;
     this.annotate = options.annotate ?? false;
+    this.noCoordsRate = options.noCoordsRate ?? 0;
     this.openVisit();
   }
 
@@ -158,6 +172,11 @@ export class BoardModel {
     return this.stuck;
   }
 
+  /** How many takeouts were called off (ground truth for the chaos suite). */
+  get calledOffTakeouts(): number {
+    return this.callOffs;
+  }
+
   get currentStatus(): string {
     return this.status;
   }
@@ -177,11 +196,13 @@ export class BoardModel {
       status: this.status,
     };
     if (this.list.length > 0 || this.emptyThrows === 'array') {
-      data.throws = this.list.map((d) => ({
-        bouncer: false,
-        coords: { x: d.coords.x, y: d.coords.y },
-        segment: rawSegmentOf(d.segment, this.missStyle),
-      }));
+      data.throws = this.list.map((d) => {
+        const entry: Record<string, unknown> = { bouncer: false };
+        if (!d.noCoords) entry.coords = { x: d.coords.x, y: d.coords.y };
+        entry.segment = rawSegmentOf(d.segment, this.missStyle);
+        if (this.annotate) entry._simDet = d.id;
+        return entry;
+      });
     }
     if (this.annotate) data._simVisit = this.currentVisit.index;
     return data;
@@ -283,8 +304,39 @@ export class BoardModel {
     if (this.status === 'Takeout in progress' || !this.running) return;
     this.status = 'Takeout in progress';
     this.event = 'Takeout started';
+    this.takeoutList = [...this.list];
     this.changed();
     this.motion(true);
+  }
+
+  /**
+   * During a takeout, one dart comes out (default: the first listed), as on a real board where
+   * darts are pulled one at a time. The board lists the rest; the takeout goes on. Pulling the
+   * last dart leaves an empty board still in takeout until `finishTakeout()`.
+   */
+  pullDart(index = 0): Detection | null {
+    if (this.status !== 'Takeout in progress' || this.stuck) return null;
+    const [det] = this.list.splice(index, 1);
+    if (!det) return null;
+    det.pulled = true;
+    this.changed();
+    return det;
+  }
+
+  /**
+   * The board calls a takeout off: the hand left with every dart still in. The status returns to
+   * throwing ("Takeout" with 3 darts); nothing new happened, so the event stays "Takeout
+   * started". Only before any dart was pulled; returns whether it happened.
+   */
+  callOffTakeout(): boolean {
+    const startedWith = this.takeoutList;
+    if (this.status !== 'Takeout in progress' || this.stuck || !startedWith || startedWith.length === 0 || startedWith.length !== this.list.length) return false;
+    this.takeoutList = null;
+    this.status = this.list.length >= 3 ? 'Takeout' : 'Throw';
+    this.callOffs++;
+    this.changed();
+    this.motion(false);
+    return true;
   }
 
   /** All darts are off the board. */
@@ -362,6 +414,8 @@ export class BoardModel {
       withdrawn: false,
       history: [{ segment, coords }],
     };
+    // Drawn only when asked for, so boards without the option replay the same darts as before.
+    if (this.noCoordsRate > 0 && this.random() < this.noCoordsRate) det.noCoords = true;
     this.detections.push(det);
     this.list.push(det);
     this.currentVisit.everDetections.push(det.id);
@@ -374,7 +428,10 @@ export class BoardModel {
 
   private closeVisit(by: 'takeout' | 'reset'): void {
     const v = this.currentVisit;
-    v.finalDetections = this.list.map((d) => d.id);
+    // Darts pulled during the takeout were still in the visit: its darts are those listed when
+    // the takeout began.
+    v.finalDetections = (by === 'takeout' && this.takeoutList ? this.takeoutList : this.list).map((d) => d.id);
+    this.takeoutList = null;
     v.endedAt = this.now();
     v.endedBy = by;
     this.list = [];

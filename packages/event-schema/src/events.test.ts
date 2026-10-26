@@ -5,6 +5,7 @@ import {
   BOARD_FACT_TYPES,
   DEFAULT_HOUSE_RULES,
   GAME_FACT_TYPES,
+  SOURCE_ANOMALY_NOTE_MAX,
   arcadeEventJsonSchema,
   isBoardFact,
   makeSegment,
@@ -107,6 +108,13 @@ describe('envelope rules', () => {
       indexInVisit: 3,
     });
     expect(ArcadeEventSchema.safeParse(e).success).toBe(false);
+  });
+
+  it('caps a SourceAnomaly note at 500 characters', () => {
+    const anomaly = (note: string) => envelope(3, 'SourceAnomaly', { note, rawExcerpt: '{}' });
+    expect(SOURCE_ANOMALY_NOTE_MAX).toBe(500);
+    expect(ArcadeEventSchema.safeParse(anomaly('n'.repeat(500))).success).toBe(true);
+    expect(ArcadeEventSchema.safeParse(anomaly('n'.repeat(501))).success).toBe(false);
   });
 });
 

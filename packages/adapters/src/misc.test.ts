@@ -104,7 +104,7 @@ describe('rebuildVisitState', () => {
   it('starts a fresh visit after a takeout or reset', () => {
     const facts = scriptToFacts([{ dart: 'T20' }, { reset: true }], { ids, clock: () => 't' });
     const state = rebuildVisitState(facts, () => '01JBX00000000000000000000V');
-    expect(state).toEqual({ visitKey: '01JBX00000000000000000000V', known: [], inTakeout: false, recentVisits: [], observedAt: 't' });
+    expect(state).toEqual({ visitKey: '01JBX00000000000000000000V', known: [], inTakeout: false, recentVisits: [], observedAt: 't', boardEvent: 'Manual reset' });
   });
 
   it('remembers when the board was last read, ignoring facts that do not come from a reading', () => {

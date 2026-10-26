@@ -1,6 +1,6 @@
 import { sameSegment, type Coords, type Segment } from '@arcade/event-schema';
 import { normalizeThrow, type NormalizedThrow } from '../normalize';
-import type { RawState } from '../raw';
+import { KNOWN_STATUSES, type RawState } from '../raw';
 
 /** A `state` frame or `GET /api/state` body after normalization. */
 export interface Snapshot {
@@ -28,8 +28,15 @@ export function toSnapshot(raw: RawState): Snapshot {
   return snap;
 }
 
+/**
+ * The board shows a takeout in progress. The status says what the board is doing now, so it
+ * decides; the event (the last thing that happened) only counts when the status is missing or
+ * unknown. A takeout called off returns the status to "Throw" (or "Takeout" with 3 darts) and
+ * may leave the event at "Takeout started".
+ */
 export function takeoutBegins(s: Snapshot): boolean {
-  return s.event === 'Takeout started' || s.status === 'Takeout in progress';
+  if (s.status !== undefined && (KNOWN_STATUSES as readonly string[]).includes(s.status)) return s.status === 'Takeout in progress';
+  return s.event === 'Takeout started';
 }
 
 const LIFECYCLE_EVENTS = new Set([
@@ -69,7 +76,9 @@ interface DartLike {
  * - `same`: same segment, same place (or no coordinates to tell);
  * - `updated`: the board re-read this dart: new segment, nearly the same place;
  * - `other`: a different physical dart;
- * - `unknown`: different segment and no coordinates to tell an update from a new dart.
+ * - `unknown`: no coordinates to tell an update from a new dart (different segment), or only
+ *   one of the two has coordinates. A dart the board reports with coordinates is reported with
+ *   them every time, so a dart without them is not taken for it on its segment alone.
  */
 export function relate(known: DartLike, seen: DartLike): Relation {
   const seg = sameSegment(known.segment, seen.segment);
@@ -78,5 +87,6 @@ export function relate(known: DartLike, seen: DartLike): Relation {
     if (seg) return d <= SAME_DART_TOLERANCE ? 'same' : 'other';
     return d <= MOVED_DART_TOLERANCE ? 'updated' : 'other';
   }
+  if (known.coords || seen.coords) return 'unknown';
   return seg ? 'same' : 'unknown';
 }

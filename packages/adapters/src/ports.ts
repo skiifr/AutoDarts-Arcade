@@ -76,6 +76,13 @@ export interface BoardSource {
    * (`rebuildVisitState`). Called while stopped. Sources without visit state omit it.
    */
   restore?(state: RestoredVisitState): void;
+  /**
+   * When the source last knew the board's state for sure (ISO, its wall clock), as it would count
+   * it if the link broke now. Persist it with the session and pass it back as
+   * `RestoredVisitState.observedAt` on a crash-resume when it is later than the log's own, so a
+   * quick relaunch does not count as a long outage. Sources without a board omit it.
+   */
+  lastContactAt?(): string | undefined;
 }
 
 /** Reports an error outside the current call stack (as an uncaught error), without unwinding it. */

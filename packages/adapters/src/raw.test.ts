@@ -63,4 +63,43 @@ describe('excerpt and redaction', () => {
     expect(out).toContain('"x":"keep"');
     expect(out).toContain('"board_id":"b1"');
   });
+
+  it.each([
+    ['TOKEN', '{"TOKEN":"T-1"}'],
+    ['PASSWORD', '{"PASSWORD":"P-1"}'],
+    ['passwd', '{"passwd":"P-1"}'],
+    ['SECRET', '{"SECRET":"S-1"}'],
+    ['api-key', '{"api-key":"AK-1"}'],
+    ['x-api-key', '{"x-api-key":"AK-1"}'],
+    ['Authorization', '{"Authorization":"Bearer AK-1"}'],
+    ['auth', '{"auth":{"user":"u","pass":"AK-1"}}'],
+    ['privateKeyPem', '{"privateKeyPem":"-----BEGIN AK-1"}'],
+    ['certificate', '{"certificate":"AK-1"}'],
+    ['credential', '{"credentials":["AK-1"]}'],
+    ['session', '{"sessionId":"AK-1"}'],
+    ['cookie', '{"Cookie":"sid=AK-1"}'],
+    ['apiKey, an object value', '{"apiKey":{"value":"AK-123"}}'],
+    ['apiKey, a list value', '{"apiKey":["AK 123"]}'],
+    ['apiKey, nested and with a comma', '{"cfg":{"apiKey":{"id":1,"value":"AK-123"},"keep":1}}'],
+    ['a bare value with a space', '{"token":Bearer AK-123}'],
+    ['cut off mid-value', '{"apiKey":{"value":"AK-123'],
+    ['in plain text', 'Authorization: Bearer AK-123; apiKey=AK-123 & x'],
+    ['in a quoted plain-text value', 'status "token: \\"AK-123\\""'],
+  ])('redacts the whole value: %s', (_label, text) => {
+    const out = redactSecrets(text);
+    expect(out).not.toMatch(/AK|T-1|P-1|S-1|BEGIN/);
+    expect(out).toContain('[redacted]');
+  });
+
+  it('keeps everything else, and the board’s fields untouched', () => {
+    const frame = '{"type":"state","data":{"status":"Throw","event":"Throw detected","numThrows":1,"throws":[{"bouncer":false,"coords":{"x":0.1,"y":0.2},"segment":{"bed":"Single","multiplier":1,"name":"S5","number":5}}]}}';
+    expect(redactSecrets(frame)).toBe(frame);
+    expect(excerpt(JSON.parse(frame))).toBe(frame);
+  });
+
+  it('excerpts of values redact by key, whatever the value', () => {
+    const out = excerpt({ board: { apiKey: { value: 'AK-1', list: ['AK-2'] }, Authorization: 'Bearer AK-3' }, keep: 'k' });
+    expect(out).not.toMatch(/AK/);
+    expect(out).toContain('"keep":"k"');
+  });
 });

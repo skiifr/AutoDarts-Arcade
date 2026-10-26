@@ -1,6 +1,6 @@
 import type { BoardFactDraft } from '@arcade/event-schema';
 import { AutodartsLocalAdapter, type AdapterTiming, type AutodartsLocalOptions } from '../autodarts-local/adapter';
-import type { VisitState } from '../autodarts-local/visit-tracker';
+import type { RestoredVisitState } from '../autodarts-local/rebuild';
 import type { Transport } from '../ports';
 import { createUlidSource, seededRandom } from '../random';
 import { BoardModel, type BoardModelOptions } from '../simulator/board-model';
@@ -27,7 +27,7 @@ export interface RigOptions {
   seed?: string | number;
   faults?: FaultPlan;
   board?: Partial<Omit<BoardModelOptions, 'random' | 'now'>>;
-  restored?: VisitState;
+  restored?: RestoredVisitState;
   timing?: Partial<AdapterTiming>;
   latencyMs?: number;
   stateOnlySocket?: boolean;

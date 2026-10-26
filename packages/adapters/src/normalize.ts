@@ -108,6 +108,14 @@ function bedAgrees(hint: BedHint, number: number, multiplier: number): boolean {
   return hint === 'triple';
 }
 
+/** A value for a note, never longer than `max`, without running any of its code. */
+function shown(v: unknown, max = 32): string {
+  if (typeof v === 'string') return v.slice(0, max);
+  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint' || v === null || v === undefined) return String(v).slice(0, max);
+  return excerpt(v, max);
+}
+
+/** A board segment → normalized `Segment`. Total: whatever `raw` is, it returns and never throws. */
 export function normalizeSegment(raw: unknown): NormalizedSegment {
   const notes: string[] = [];
   const fatal = (note: string): NormalizedSegment => ({
@@ -115,12 +123,22 @@ export function normalizeSegment(raw: unknown): NormalizedSegment {
     fatal: { note: `unreadable segment (${note}); counted as a miss pending review`, rawExcerpt: excerpt(raw) },
     notes,
   });
+  try {
+    return readSegment(raw, notes, fatal);
+  } catch {
+    // A getter or proxy trap that throws: nothing about this segment can be trusted.
+    notes.length = 0;
+    return fatal('segment could not be read');
+  }
+}
+
+function readSegment(raw: unknown, notes: string[], fatal: (note: string) => NormalizedSegment): NormalizedSegment {
   if (!isRecord(raw)) return fatal('segment missing or not an object');
 
   const { number, multiplier, bed, name } = raw;
   let bedHint: BedHint | undefined;
   if (typeof bed === 'string') {
-    bedHint = BED_HINTS[bed];
+    bedHint = Object.hasOwn(BED_HINTS, bed) ? BED_HINTS[bed] : undefined;
     if (bedHint === undefined) notes.push(`unknown bed "${bed.slice(0, 32)}"`);
   } else if (bed !== undefined && bed !== null) {
     notes.push('bed is not a string');
@@ -150,7 +168,7 @@ export function normalizeSegment(raw: unknown): NormalizedSegment {
     const sector = sectorOf(number) ?? (nameHint?.kind === 'miss' ? sectorOf(nameHint.sector) : undefined);
     return { segment: miss(sector), notes };
   }
-  if (missHinted) return fatal(`miss hint with multiplier ${String(multiplier)}`);
+  if (missHinted) return fatal(`miss hint with multiplier ${shown(multiplier)}`);
 
   if (!isInt(number) || !isInt(multiplier)) return fatal('number or multiplier missing');
   if (multiplier < 1 || multiplier > 3) return fatal(`multiplier ${multiplier}`);
@@ -171,22 +189,30 @@ export function normalizeSegment(raw: unknown): NormalizedSegment {
 
 function normalizeCoords(raw: unknown, notes: string[]): Coords | undefined {
   if (raw === undefined || raw === null) return undefined;
-  if (isRecord(raw) && typeof raw.x === 'number' && typeof raw.y === 'number') {
-    if (Number.isFinite(raw.x) && Number.isFinite(raw.y)) return { x: raw.x, y: raw.y };
+  if (isRecord(raw)) {
+    const { x, y } = raw; // read once: a getter may answer differently each time
+    if (typeof x === 'number' && typeof y === 'number' && Number.isFinite(x) && Number.isFinite(y)) return { x, y };
   }
   notes.push('coords not two finite numbers');
   return undefined;
 }
 
-/** One entry of `state.throws`: `{segment, coords?, bouncer?}`. */
+/** One entry of `state.throws`: `{segment, coords?, bouncer?}`. Total, like `normalizeSegment`. */
 export function normalizeThrow(raw: unknown): NormalizedThrow {
-  if (!isRecord(raw)) {
-    const n = normalizeSegment(undefined);
-    return { ...n, fatal: { note: 'throw entry is not an object; counted as a miss pending review', rawExcerpt: excerpt(raw) } };
+  const unreadable = (note: string): NormalizedThrow => ({
+    segment: MISS,
+    fatal: { note: `${note}; counted as a miss pending review`, rawExcerpt: excerpt(raw) },
+    notes: [],
+  });
+  try {
+    if (!isRecord(raw)) return unreadable('throw entry is not an object');
+    const result: NormalizedThrow = normalizeSegment(raw.segment);
+    const coords = normalizeCoords(raw.coords, result.notes);
+    if (raw.bouncer === true) result.notes.push('bouncer: true observed');
+    if (result.fatal) result.fatal = { ...result.fatal, rawExcerpt: excerpt(raw) };
+    return coords === undefined ? result : { ...result, coords };
+  } catch {
+    // A getter or proxy trap that throws: nothing about this dart can be trusted.
+    return unreadable('throw entry could not be read');
   }
-  const result: NormalizedThrow = normalizeSegment(raw.segment);
-  const coords = normalizeCoords(raw.coords, result.notes);
-  if (raw.bouncer === true) result.notes.push('bouncer: true observed');
-  if (result.fatal) result.fatal = { ...result.fatal, rawExcerpt: excerpt(raw) };
-  return coords === undefined ? result : { ...result, coords };
 }

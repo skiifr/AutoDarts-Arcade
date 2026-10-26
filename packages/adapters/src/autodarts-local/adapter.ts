@@ -1,9 +1,9 @@
 import type { BoardFactDraft, EventSource } from '@arcade/event-schema';
 import type { BoardGetPath } from '../endpoints';
 import { Listeners, type BoardSource, type Clock, type EventsSocket, type FactListener, type HttpResponse, type IdSource, type RandomSource, type Scheduler, type TimerHandle, type Transport } from '../ports';
-import { MAX_FRAME_CHARS, excerpt, parseEventFrame, parseStateBody } from '../raw';
+import { MAX_FRAME_CHARS, cleanNote, excerpt, parseEventFrame, parseStateBody, serialize } from '../raw';
 import { RawFrameRing, type RawChannel } from '../ring-buffer';
-import { epochMsFromIso } from '../simulator/iso-time';
+import { epochMsFromIso, isoFromEpochMs } from '../simulator/iso-time';
 import type { RestoredVisitState } from './rebuild';
 import { toSnapshot, type Snapshot } from './snapshot';
 import { boardStatusOf, isKnownStatus, isStuckTakeoutCandidate, parseVersion, profileFor, type BoardStatus } from './status';
@@ -100,8 +100,8 @@ export interface AutodartsLocalOptions {
   timing?: Partial<AdapterTiming>;
   /** Diagnostics buffer; one is created when omitted. */
   ring?: RawFrameRing;
-  /** Test and diagnostics hook, called before each snapshot is applied. */
-  observer?: { beforeApply?(snapshot: Snapshot, mode: ApplyMode): void };
+  /** Test and diagnostics hooks, called before and after each snapshot is applied. */
+  observer?: { beforeApply?(snapshot: Snapshot, mode: ApplyMode): void; afterApply?(snapshot: Snapshot, mode: ApplyMode): void };
   /**
    * Where an error thrown by a fact or status listener goes. It never unwinds the adapter.
    * Default: reported as an uncaught error, asynchronously.
@@ -117,6 +117,12 @@ export const REQUEST_WATCHDOG_SLACK_MS = 1000;
 
 const MAX_DISTINCT_ANOMALIES = 64;
 const MAX_CONFIRM_ROUNDS = 2;
+
+/**
+ * Frames kept while a resync's state read is out. A board sends a frame per change, so a handful
+ * is normal; past this the oldest go (the read and the newest frames hold the latest state).
+ */
+export const MAX_BUFFERED_FRAMES = 64;
 
 /**
  * The Autodarts local-API adapter (ARCHITECTURE §6). Reads `WS /api/events` and
@@ -146,6 +152,8 @@ export class AutodartsLocalAdapter implements BoardSource {
 
   private connectTimer: TimerHandle | null = null;
   private openTimer: TimerHandle | null = null;
+  /** Abandons a resync that has not finished within its read's timeout plus the watchdog slack. */
+  private resyncTimer: TimerHandle | null = null;
   private livenessTimer: TimerHandle | null = null;
   private stuckTimer: TimerHandle | null = null;
 
@@ -199,6 +207,21 @@ export class AutodartsLocalAdapter implements BoardSource {
   /** The last board status reported, for the health sampler. */
   currentBoardStatus(): BoardStatus | undefined {
     return this.stuckReported ? 'stuck-takeout' : this.boardStatus;
+  }
+
+  /**
+   * The last good contact with the board (ISO, the wall clock), as the adapter would count it if
+   * the link broke now: a frame, a state read, or an on-time heartbeat of a healthy socket, no
+   * later than LINK_LOSS_MS ago; once a liveness poll is out (the socket went quiet), only the
+   * last frame or read. A half-open socket goes unnoticed until liveness fires, so for up to
+   * `livenessMs` the value may run that much late. Undefined before any contact.
+   */
+  lastContactAt(): string | undefined {
+    const from = this.phase === 'online' && this.socketInDoubt ? this.evidence : this.contact;
+    const now = this.wallNow();
+    let wall = from.wall;
+    if (wall !== null && now !== null && this.phase === 'online') wall = Math.min(wall, now - LINK_LOSS_MS);
+    return wall === null ? undefined : isoFromEpochMs(wall);
   }
 
   get version(): string | undefined {
@@ -299,6 +322,12 @@ export class AutodartsLocalAdapter implements BoardSource {
           this.resyncCorrelation = this.o.ids();
           this.emitConnection('resyncing');
           this.fetchResyncSnapshot(gen);
+          // Whatever goes wrong in the resync, it cannot hold the adapter in `resyncing`.
+          const limit = this.t.requestTimeoutMs + REQUEST_WATCHDOG_SLACK_MS;
+          this.resyncTimer = this.o.scheduler.setTimeout(() => {
+            this.resyncTimer = null;
+            if (gen === this.gen && this.phase === 'resyncing') this.attemptFailed(`resync did not finish within ${limit} ms`, true);
+          }, limit);
         },
         onMessage: (text) => {
           if (gen === this.gen) this.onFrame(text);
@@ -318,21 +347,24 @@ export class AutodartsLocalAdapter implements BoardSource {
   }
 
   private fetchResyncSnapshot(gen: number): void {
+    const failed = (why: string): void => {
+      if (this.buffered.length > 0) this.finishResync(null);
+      else this.attemptFailed(`state read failed${why}`, true);
+    };
     this.get('/api/state', gen).then(
       (res) => {
         if (gen !== this.gen) return;
-        const parsed = res.status === 200 ? parseStateBody(res.body) : null;
-        if (parsed?.ok) this.finishResync(toSnapshot(parsed.data));
-        else {
+        const read = this.safely('reading the resync state', res, () => {
+          const parsed = res.status === 200 ? parseStateBody(res.body) : null;
           if (parsed && !parsed.ok) this.anomalyOnce(parsed.note, res.body);
-          if (this.buffered.length > 0) this.finishResync(null);
-          else this.attemptFailed(`state read failed (HTTP ${res.status})`, true);
-        }
+          return { status: res.status, snap: parsed?.ok ? toSnapshot(parsed.data) : null };
+        });
+        if (gen !== this.gen) return;
+        if (read?.snap) this.finishResync(read.snap);
+        else failed(` (HTTP ${read?.status ?? 'unreadable'})`);
       },
       (err: unknown) => {
-        if (gen !== this.gen) return;
-        if (this.buffered.length > 0) this.finishResync(null);
-        else this.attemptFailed(`state read failed: ${errorText(err)}`, true);
+        if (gen === this.gen) failed(`: ${errorText(err)}`);
       },
     );
   }
@@ -345,13 +377,14 @@ export class AutodartsLocalAdapter implements BoardSource {
   private finishResync(snapshot: Snapshot | null): void {
     const queue = snapshot ? [...this.buffered, snapshot] : [...this.buffered];
     this.buffered = [];
+    this.clear('resyncTimer');
     const correlationId = this.resyncCorrelation ?? this.o.ids();
     let needsConfirm = false;
     const awayMs = this.awayMs();
     this.markContact(true);
     queue.forEach((snap, i) => {
       if (i === 0) this.applySnapshot(snap, 'resync', correlationId, awayMs);
-      else if (this.tracker.classifyFrame(snap) === 'apply') this.applySnapshot(snap, 'live');
+      else if (this.safely('classifying a frame', snap.raw, () => this.tracker.classifyFrame(snap)) === 'apply') this.applySnapshot(snap, 'live');
       else needsConfirm = true;
     });
     this.phase = 'online';
@@ -388,7 +421,7 @@ export class AutodartsLocalAdapter implements BoardSource {
   private connectionLost(error: string, socketWasQuiet = false): void {
     // A socket that went quiet may have been dead since its last frame: heartbeats since then
     // proved nothing.
-    if (socketWasQuiet) this.contact = { ...this.evidence };
+    if (socketWasQuiet) this.capContact(this.evidence);
     else this.endContact();
     this.gen++;
     this.teardown();
@@ -403,6 +436,7 @@ export class AutodartsLocalAdapter implements BoardSource {
 
   private teardown(): void {
     this.clear('openTimer');
+    this.clear('resyncTimer');
     this.clear('livenessTimer');
     this.clear('stuckTimer');
     this.clear('tickTimer');
@@ -436,25 +470,37 @@ export class AutodartsLocalAdapter implements BoardSource {
       this.anomalyOnce(`frame over ${MAX_FRAME_CHARS} chars dropped`, text);
       return;
     }
-    const parsed = parseEventFrame(text);
-    if (parsed.kind === 'invalid') {
-      this.anomalyOnce(parsed.note, text);
+    const snap = this.safely('reading a frame', text, () => {
+      const parsed = parseEventFrame(text);
+      if (parsed.kind === 'invalid') {
+        this.anomalyOnce(parsed.note, text);
+        return null;
+      }
+      // motion_state, cam_state, stats, cam_stats: they show the socket is alive but say nothing
+      // about the darts, so they do not hold off the liveness poll (the self-healing read).
+      if (parsed.kind === 'other') return null;
+      return toSnapshot(parsed.data);
+    });
+    if (snap === null) return;
+    if (snap === undefined) {
+      // Unreadable for a reason we did not foresee: read the board's state instead.
+      this.requestPoll();
       return;
     }
-    // motion_state, cam_state, stats, cam_stats: they show the socket is alive but say nothing
-    // about the darts, so they do not hold off the liveness poll (the self-healing read).
-    if (parsed.kind === 'other') return;
     if (this.phase === 'online') {
       this.markContact(true);
       this.armLiveness();
     }
-    const snap = toSnapshot(parsed.data);
     if (this.phase === 'resyncing') {
+      if (this.buffered.length >= MAX_BUFFERED_FRAMES) {
+        this.buffered.shift();
+        this.anomalyOnce(`more than ${MAX_BUFFERED_FRAMES} frames during a resync: the oldest dropped`, '');
+      }
       this.buffered.push(snap);
       return;
     }
     if (this.phase !== 'online') return;
-    if (this.tracker.classifyFrame(snap) === 'apply') this.applySnapshot(snap, 'live');
+    if (this.safely('classifying a frame', snap.raw, () => this.tracker.classifyFrame(snap)) === 'apply') this.applySnapshot(snap, 'live');
     else this.requestPoll();
   }
 
@@ -474,13 +520,18 @@ export class AutodartsLocalAdapter implements BoardSource {
         if (gen !== this.gen) return;
         this.pollInFlight = false;
         this.pollFailures = 0;
-        const parsed = res.status === 200 ? parseStateBody(res.body) : null;
-        if (parsed?.ok) {
+        const snap = this.safely('reading a state poll', res, () => {
+          const parsed = res.status === 200 ? parseStateBody(res.body) : null;
+          if (parsed?.ok) return toSnapshot(parsed.data);
+          this.anomalyOnce(parsed && !parsed.ok ? parsed.note : `state poll answered HTTP ${res.status}`, res.body);
+          return null;
+        });
+        if (snap) {
           this.markContact(true);
           this.socketInDoubt = false;
-          const snap = toSnapshot(parsed.data);
           const fresh = this.tracker.changeCount === changesAtIssue;
-          if (fresh || this.confirmRounds >= MAX_CONFIRM_ROUNDS || this.tracker.classifyFrame(snap) === 'apply') {
+          const plain = (): boolean => this.safely('classifying a state poll', snap.raw, () => this.tracker.classifyFrame(snap)) === 'apply';
+          if (fresh || this.confirmRounds >= MAX_CONFIRM_ROUNDS || plain()) {
             this.confirmRounds = 0;
             this.applySnapshot(snap, 'live');
           } else {
@@ -488,9 +539,9 @@ export class AutodartsLocalAdapter implements BoardSource {
             this.confirmRounds++;
             this.pollAgain = true;
           }
-        } else {
-          this.anomalyOnce(parsed && !parsed.ok ? parsed.note : `state poll answered HTTP ${res.status}`, res.body);
         }
+        // Whatever the read held, liveness goes on.
+        if (gen !== this.gen) return;
         this.armLiveness();
         if (this.pollAgain) {
           this.pollAgain = false;
@@ -532,19 +583,23 @@ export class AutodartsLocalAdapter implements BoardSource {
     if (evidence) this.evidence = { ...at };
   }
 
-  /** The connection ends (it broke, or we let it go): contact counts only up to LINK_LOSS_MS before now. */
+  /**
+   * The connection ends (it broke, or we let it go): contact counts only up to LINK_LOSS_MS before
+   * now, whatever arrived last. A frame or read that came in during that second proves the board's
+   * state when it was sent, but the frames after it may be the ones lost with the link, and it may
+   * itself have been late; counting it would make the outage come out shorter than the time the
+   * board was really out of sight.
+   */
   private endContact(): void {
     if (this.phase !== 'online') return;
-    const cap = { mono: this.o.scheduler.now() - LINK_LOSS_MS, wall: this.wallNow() };
-    if (cap.wall !== null) cap.wall -= LINK_LOSS_MS;
-    const e = this.evidence;
-    const c = this.contact;
-    const pick = (cv: number | null, capv: number | null, ev: number | null): number | null => {
-      if (cv === null) return ev;
-      const capped = capv === null ? cv : Math.min(cv, capv);
-      return ev === null ? capped : Math.max(ev, capped);
-    };
-    this.contact = { mono: pick(c.mono, cap.mono, e.mono), wall: pick(c.wall, cap.wall, e.wall) };
+    this.capContact(this.contact);
+  }
+
+  /** Sets contact to `from`, but no later than LINK_LOSS_MS before now. */
+  private capContact(from: { mono: number | null; wall: number | null }): void {
+    const wall = this.wallNow();
+    const cap = (v: number | null, now: number | null): number | null => (v === null || now === null ? v : Math.min(v, now - LINK_LOSS_MS));
+    this.contact = { mono: cap(from.mono, this.o.scheduler.now()), wall: cap(from.wall, wall) };
   }
 
   private restoreContact(state: RestoredVisitState | undefined): void {
@@ -628,13 +683,30 @@ export class AutodartsLocalAdapter implements BoardSource {
 
   // ── applying snapshots ───────────────────────────────────────────────────
 
+  /**
+   * Applies a snapshot. An error thrown on the way (a bug, a hook) becomes a SourceAnomaly: the
+   * snapshot is skipped and the adapter carries on; the next read heals the stream.
+   */
   private applySnapshot(snap: Snapshot, mode: ApplyMode, correlationId?: string, awayMs?: number): void {
-    for (const note of snap.notes) this.anomalyOnce(note, snap.raw);
-    for (const t of snap.throws) for (const note of t.notes) this.anomalyOnce(note, snap.raw);
-    this.o.observer?.beforeApply?.(snap, mode);
-    const facts = this.tracker.apply(snap, mode, awayMs);
-    for (const f of facts) this.emitTrackerFact(f, correlationId);
-    this.handleStatus(snap, correlationId);
+    this.safely('applying a board state', snap.raw, () => {
+      for (const note of snap.notes) this.anomalyOnce(note, snap.raw);
+      for (const t of snap.throws) for (const note of t.notes) this.anomalyOnce(note, snap.raw);
+      this.o.observer?.beforeApply?.(snap, mode);
+      const facts = this.tracker.apply(snap, mode, awayMs);
+      for (const f of facts) this.emitTrackerFact(f, correlationId);
+      this.handleStatus(snap, correlationId);
+      this.o.observer?.afterApply?.(snap, mode);
+    });
+  }
+
+  /** Runs `fn`; an error it throws is reported once as a SourceAnomaly and `undefined` returned. */
+  private safely<T>(what: string, raw: unknown, fn: () => T): T | undefined {
+    try {
+      return fn();
+    } catch (err) {
+      this.anomalyOnce(`internal error while ${what}: ${errorText(err)}`, raw);
+      return undefined;
+    }
   }
 
   private emitTrackerFact(f: TrackerFact, correlationId: string | undefined): void {
@@ -684,7 +756,10 @@ export class AutodartsLocalAdapter implements BoardSource {
   }
 
   private emit(body: FactBody, correlationId = this.resyncCorrelation): void {
-    const draft = { ...body, source: this.source(), occurredAt: this.o.clock() } as BoardFactDraft;
+    // Every anomaly, whoever wrote it, leaves with its secrets redacted and its note capped.
+    const clean: FactBody =
+      body.type === 'SourceAnomaly' ? { type: body.type, payload: { note: cleanNote(body.payload.note), rawExcerpt: excerpt(body.payload.rawExcerpt) } } : body;
+    const draft = { ...clean, source: this.source(), occurredAt: this.o.clock() } as BoardFactDraft;
     if (correlationId !== undefined) draft.correlationId = correlationId;
     this.facts.emit(draft);
   }
@@ -700,7 +775,7 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.lastEmittedConn = state;
     const payload: { state: typeof state; attempt?: number; error?: string } = { state };
     if (state !== 'online' && this.attempt > 0) payload.attempt = this.attempt;
-    if (error !== undefined) payload.error = error.slice(0, 200);
+    if (error !== undefined) payload.error = cleanNote(error, 200);
     this.emit({ type: 'SourceConnectionChanged', payload });
   }
 
@@ -734,7 +809,7 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.ring.push(this.o.clock(), channel, text);
   }
 
-  private clear(name: 'connectTimer' | 'openTimer' | 'livenessTimer' | 'stuckTimer' | 'tickTimer'): void {
+  private clear(name: 'connectTimer' | 'openTimer' | 'resyncTimer' | 'livenessTimer' | 'stuckTimer' | 'tickTimer'): void {
     const h = this[name];
     if (h !== null) {
       this.o.scheduler.clearTimeout(h);
@@ -745,7 +820,12 @@ export class AutodartsLocalAdapter implements BoardSource {
 
 type FactBody = BoardFactDraft extends infer D ? (D extends BoardFactDraft ? Pick<D, 'type' | 'payload'> : never) : never;
 
+/** A short description of anything thrown. Never throws itself. */
 function errorText(err: unknown): string {
-  if (err instanceof Error) return err.message.slice(0, 160);
-  return String(err).slice(0, 160);
+  try {
+    const message: unknown = err instanceof Error ? err.message : err;
+    return (typeof message === 'string' ? message : serialize(message, 160)).slice(0, 160);
+  } catch {
+    return 'an unreadable error';
+  }
 }
