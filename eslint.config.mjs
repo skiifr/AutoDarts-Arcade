@@ -51,10 +51,14 @@ export default defineConfig(
         'error',
         { name: 'Date', message: 'Pure packages take time as input; do not read the clock.' },
       ],
+      'no-restricted-properties': [
+        'error',
+        { object: 'Math', property: 'random', message: 'Pure packages take randomness from the seeded Rng.' },
+      ],
     },
   },
   {
     files: ['**/*.test.ts', '**/*.test.tsx'],
-    rules: { 'no-restricted-globals': 'off' },
+    rules: { 'no-restricted-globals': 'off', 'no-restricted-properties': 'off' },
   },
 );

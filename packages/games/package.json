@@ -1,0 +1,13 @@
+{
+  "name": "@arcade/games",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Game modules, one folder per game. Pure TypeScript: no React, React Native or platform imports.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@arcade/engine": "*",
+    "@arcade/event-schema": "*",
+    "zod": "^4.6.7"
+  }
+}

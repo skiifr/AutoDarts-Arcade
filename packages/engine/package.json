@@ -1,0 +1,12 @@
+{
+  "name": "@arcade/engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Session host, event log and fold/replay engine. Pure TypeScript: no React, React Native or platform imports.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@arcade/event-schema": "*",
+    "zod": "^4.6.7"
+  }
+}

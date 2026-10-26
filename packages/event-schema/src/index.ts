@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ArcadeEventSchema } from './events';
 
 export * from './commands';
+export * from './drafts';
 export * from './events';
 export * from './ids';
 export * from './segment';
