@@ -21,9 +21,17 @@ export interface DartOnBoard {
 export class BoardVisitTracker {
   private visitKey: string | null = null;
   private readonly darts = new Map<string, DartOnBoard>();
+  private connection: Extract<BoardFactDraft, { type: 'SourceConnectionChanged' }> | null = null;
+  private status: Extract<BoardFactDraft, { type: 'BoardStatusChanged' }> | null = null;
 
   observe(fact: BoardFactDraft): void {
     switch (fact.type) {
+      case 'SourceConnectionChanged':
+        this.connection = fact;
+        return;
+      case 'BoardStatusChanged':
+        this.status = fact;
+        return;
       case 'DartDetected': {
         const p = fact.payload;
         if (p.visitKey !== this.visitKey) {
@@ -71,5 +79,16 @@ export class BoardVisitTracker {
   /** Darts on the board, in the order the board reported them. */
   onBoard(): DartOnBoard[] {
     return [...this.darts.values()].map((d) => ({ ...d }));
+  }
+
+  /**
+   * The last connection and board status reported, so a new session's log starts from the
+   * board as it is (the W3 status, manual-mode detection, and the crash-resume contact time).
+   */
+  boardState(): BoardFactDraft[] {
+    const out: BoardFactDraft[] = [];
+    if (this.connection) out.push(this.connection);
+    if (this.status) out.push(this.status);
+    return out;
   }
 }

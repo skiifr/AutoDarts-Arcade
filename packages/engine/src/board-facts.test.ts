@@ -279,3 +279,29 @@ describe('held darts when the game ends (review release)', () => {
     expect(s.canComplete).toBe(true);
   });
 });
+
+describe('a new session starts from the board as it is', () => {
+  it('records the last connection and board status reported before StartSession', async () => {
+    const rig = makeRig();
+    const { board, cmd } = rig;
+    const before = await rig.run(board.connection('connecting'), board.connection('online'), board.status('throwing'), board.dart(S20));
+    expect(before.map((r) => r.status)).toEqual(['not-recorded', 'not-recorded', 'not-recorded', 'not-recorded']);
+    const [start] = await rig.run(cmd.start('test-sum', [A, B]));
+    expect(types(start)).toEqual(['SessionStarted', 'SourceConnectionChanged', 'BoardStatusChanged', 'DartDetected']);
+    const s = rig.host.getSnapshot()!;
+    expect(s.board).toEqual({ connection: 'online', status: 'throwing' });
+    // A board session: "Next player" on a turn the board saw nothing of stays a plain skip.
+    await rig.run(board.takeout());
+    const [skip] = await rig.run(cmd.skip());
+    expect(types(skip)).toEqual(['TurnEnded', 'TurnStarted']);
+  });
+
+  it('remembers only valid facts before a session', async () => {
+    const rig = makeRig();
+    const bad = { ...rig.board.dart(S20), payload: { throwId: 'nope' } } as unknown as BoardFactDraft;
+    const [r] = await rig.run(bad);
+    expect(r).toMatchObject({ status: 'rejected', reason: 'invalid' });
+    const [start] = await rig.run(rig.cmd.start('test-sum', [A, B]));
+    expect(types(start)).toEqual(['SessionStarted', 'TurnStarted']);
+  });
+});
