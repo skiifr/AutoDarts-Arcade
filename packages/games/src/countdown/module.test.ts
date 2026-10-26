@@ -296,5 +296,52 @@ describe('view', () => {
     expect(view.targets).toEqual([]);
     expect(view.scoreboard.every((r) => !r.active)).toBe(true);
     expect(view.visit).toMatchObject({ playerId: JO });
+    expect(view.checkout).toBeNull();
+  });
+});
+
+describe('checkout hint', () => {
+  const at = (remaining: number, options: Record<string, unknown> = {}) => {
+    const state = fresh(options);
+    return { ...state, players: state.players.map((p) => ({ ...p, remaining })) };
+  };
+
+  it('suggests the chart route for a three-dart finish at the start of a visit', () => {
+    expect(countdown.view(at(141)).checkout).toEqual(['T20', 'T19', 'D12']);
+    expect(countdown.view(at(170)).checkout).toEqual(['T20', 'T20', 'BULL']);
+  });
+
+  it('has none above 170 or on a bogey number', () => {
+    expect(countdown.view(at(171)).checkout).toBeNull();
+    expect(countdown.view(at(169)).checkout).toBeNull();
+    expect(countdown.view(at(501)).checkout).toBeNull();
+  });
+
+  it('follows the darts left in the visit and stays live after each dart', () => {
+    let state = at(141);
+    state = countdown.onDart(state, scoredDart(ALEX, 'T20'), turnCtx(ALEX)).state;
+    expect(countdown.view(state).checkout).toEqual(['T19', 'D12']);
+    state = countdown.onDart(state, scoredDart(ALEX, 'S5', 1), turnCtx(ALEX)).state;
+    // 76 left with one dart: no single-dart finish.
+    expect(countdown.view(state).checkout).toBeNull();
+  });
+
+  it('has none after a bust, whatever the score went back to', () => {
+    const state = at(40);
+    const bust = countdown.onDart(state, scoredDart(ALEX, 'T20'), turnCtx(ALEX));
+    expect(bust.endTurn).toBe('bust');
+    expect(countdown.view(bust.state).headline).toBe('Alex needs 40');
+    expect(countdown.view(bust.state).checkout).toBeNull();
+  });
+
+  it('shows the shortest finish with single out', () => {
+    expect(countdown.view(at(60, { doubleOut: false })).checkout).toEqual(['T20']);
+    expect(countdown.view(at(180, { doubleOut: false })).checkout).toEqual(['T20', 'T20', 'T20']);
+  });
+
+  it('has none before a double-in player has started', () => {
+    const state = at(40, { doubleIn: true });
+    expect(countdown.view(state).checkout).toBeNull();
+    expect(countdown.view({ ...state, players: state.players.map((p) => ({ ...p, opened: true })) }).checkout).toEqual(['D20']);
   });
 });

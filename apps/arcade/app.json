@@ -30,7 +30,17 @@
     "plugins": [
       "expo-router",
       "@react-native-tvos/config-tv",
-      ["expo-build-properties", { "android": { "usesCleartextTraffic": true } }]
+      ["expo-build-properties", { "android": { "usesCleartextTraffic": true } }],
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/BarlowCondensed-SemiBold.ttf",
+            "./assets/fonts/BarlowCondensed-Bold.ttf",
+            "./assets/fonts/BarlowCondensed-ExtraBold.ttf"
+          ]
+        }
+      ]
     ],
     "experiments": {
       "reactCompiler": true

@@ -1,25 +1,27 @@
-import { points } from '@arcade/event-schema';
 import {
   AText,
-  Banner,
-  Button,
-  DartChip,
-  Dartboard,
-  Panel,
-  PlayerBadge,
-  palette,
-  space,
+  ArcadePanel,
+  CommandRail,
+  PlayerPanel,
+  RailButton,
+  StageBanner,
+  StagePlaque,
+  UpNextList,
+  arcade,
+  gameAccent,
   useLayout,
   type BannerProps,
 } from '@arcade/ui-kit';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Modal, ScrollView, View } from 'react-native';
-import Animated, { ZoomIn } from 'react-native-reanimated';
+import { BackHandler, Modal, Platform, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AVATAR_IMAGES } from '@/shell/art';
 import { gameById } from '@/shell/catalog';
+import { DemoDrawer } from '@/shell/DemoDrawer';
 import { demo, useDemo, type ShellBanner, type ShellState } from '@/shell/demo-session';
-import { ScreenFrame } from '@/shell/ScreenFrame';
+import { GameStage, StageBackdrop, stageTexts } from '@/shell/stages';
 
 const DEFAULT_PLAYERS = [
   { name: 'Alex', colorIndex: 0 },
@@ -67,21 +69,36 @@ function bannerFor(kind: ShellBanner, state: ShellState): BannerProps | null {
   }
 }
 
-/** W3 · Live gameplay. */
+/** Players after the thrower, in throwing order, leaving out anyone who is out. */
+function upNext(state: ShellState) {
+  const n = state.players.length;
+  return Array.from({ length: Math.max(0, n - 1) }, (_, i) => state.players[(state.current + i + 1) % n]!).filter((p) => !p.out);
+}
+
+/**
+ * W3 · Live gameplay: "Up now" on the left, the game's themed stage in the middle with its
+ * title and instruction plaques (the instruction doubles as the warning banner), "Up next" on
+ * the right, and the command rail. Fix throw is always one press away; the current turn's
+ * three darts are always on screen. Demo darts live in the DEMO drawer, off the main rail.
+ */
 export default function PlayScreen() {
-  const { s, mode, input, width, gutterX } = useLayout();
+  const { s, mode, input, width, height, gutterX, gutterY } = useLayout();
+  const insets = useSafeAreaInsets();
   const state = useDemo();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [auto, setAuto] = useState(false);
+  const [stageBox, setStageBox] = useState({ width: 0, height: 0 });
   const game = gameById(state.gameId);
+  const accent = gameAccent(state.gameId);
   const wide = mode === 'wide';
+  const remote = input === 'remote';
   const player = state.players[state.current];
-  const turnTotal = state.turn.reduce((sum, d) => sum + points(d.segment), 0);
-  const lastDart = state.turn.find((d) => d.id === state.lastDartId);
   const banner = bannerFor(state.banner, state);
+  const texts = stageTexts(state);
 
   useEffect(() => {
-    if (state.players.length === 0) demo.start('siege', DEFAULT_PLAYERS, 3);
+    if (state.players.length === 0) demo.start('siege', DEFAULT_PLAYERS, 5);
   }, [state.players.length]);
 
   useEffect(() => {
@@ -102,192 +119,187 @@ export default function PlayScreen() {
     return () => clearTimeout(t);
   }, [auto, menuOpen, state]);
 
-  if (!player) return <View style={{ flex: 1, backgroundColor: palette.bg }} />;
+  // Back closes the demo drawer, otherwise pauses (the pause menu's own Back resumes).
+  useEffect(() => {
+    const back = () => {
+      if (drawerOpen) setDrawerOpen(false);
+      else if (!menuOpen) setMenuOpen(true);
+      else return false;
+      return true;
+    };
+    if (Platform.OS !== 'web') {
+      const sub = BackHandler.addEventListener('hardwareBackPress', back);
+      return () => sub.remove();
+    }
+    // Browser previews: Escape stands in for the remote's Back.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') back();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawerOpen, menuOpen]);
 
-  const boardSize = wide ? s(290) : Math.min(width - gutterX * 2, s(300));
-  const markers = state.turn.map((d, i) => ({
-    number: d.segment.bed === 'miss' ? (d.segment.missSector ?? 20) : d.segment.number,
-    bed: d.segment.bed,
-    tone: i === state.turn.length - 1 ? ('gold' as const) : ('cyan' as const),
-  }));
-  const prompt =
-    state.banner === 'takeout' || state.turn.length >= 3 ? 'Remove darts to end the turn' : `Dart ${state.turn.length + 1} of 3 — throw now`;
+  if (!player) return <View style={{ flex: 1, backgroundColor: arcade.bg }} />;
 
-  const standings = (
-    <View style={{ gap: s(space.xs) }}>
-      {state.players.map((p, i) => (
-        <PlayerBadge key={p.id} number={i + 1} colorIndex={p.colorIndex} name={p.name} score={p.score} active={i === state.current} size={wide ? 'md' : 'sm'} />
-      ))}
-    </View>
+  // TV: the same inset frame as the approved mockups (well inside the 5% title-safe area);
+  // the themed backdrop fills the screen behind it.
+  const frameX = (wide && remote ? Math.round(width * 0.119) : gutterX) + Math.max(insets.left, insets.right);
+  const frameTop = (wide && remote ? Math.round(height * 0.1) : gutterY) + insets.top;
+  const frameBottom = (wide && remote ? Math.round(height * 0.085) : gutterY) + insets.bottom;
+  const columnW = Math.round((width - frameX * 2) * 0.227);
+  const sideH = height - frameTop - frameBottom - s(58);
+  const next = upNext(state);
+  const darts = state.turn.map((d) => ({ label: d.segment.label, adjusted: d.adjusted, void: d.scored === false }));
+  const takeout = state.banner === 'takeout';
+  const round = `Round ${state.round} of ${state.maxRounds}`;
+
+  const upNow = (
+    <PlayerPanel
+      name={player.name}
+      colorIndex={player.colorIndex}
+      image={AVATAR_IMAGES[player.colorIndex]}
+      score={texts.scores[state.current] ?? player.score}
+      scoreLabel={texts.scoreLabel}
+      darts={darts}
+      turnLabel={state.turnSummary.label}
+      turnValue={state.turnSummary.value}
+      accent={accent}
+      layout={wide ? 'column' : 'row'}
+      avatarSize={Math.round(Math.max(s(44), Math.min(columnW * 0.68, sideH - s(12) - s(272))))}
+      style={wide ? { flex: 1 } : undefined}
+    />
+  );
+
+  const queue = (
+    <UpNextList
+      players={next.map((p) => ({
+        key: p.id,
+        name: p.name,
+        colorIndex: p.colorIndex,
+        image: AVATAR_IMAGES[p.colorIndex],
+        score: texts.scores[state.players.indexOf(p)] ?? p.score,
+      }))}
+      accent={accent}
+      layout={wide ? 'column' : 'row'}
+      style={wide ? { flex: 1 } : undefined}
+    />
+  );
+
+  const instruction = banner ? (
+    <StageBanner key={state.banner} {...banner} />
+  ) : (
+    <StagePlaque kind="instruction" title={texts.instruction} kicker={texts.kicker} accent={accent} />
   );
 
   const stage = (
-    <View style={{ alignItems: 'center', justifyContent: 'center', gap: s(space.sm), flex: wide ? 1 : undefined }}>
-      <Dartboard size={boardSize} markers={markers} />
-      <View style={{ height: s(34), justifyContent: 'center' }}>
-        {lastDart ? (
-          <Animated.View key={lastDart.id} entering={ZoomIn.duration(260)} style={{ flexDirection: 'row', alignItems: 'baseline', gap: s(space.sm) }}>
-            <AText variant="h1" color={points(lastDart.segment) > 0 ? 'gold' : 'textMute'}>
-              {lastDart.segment.label}
-            </AText>
-            <AText variant="h3" color="textDim">
-              {points(lastDart.segment) > 0 ? `+${points(lastDart.segment)}` : 'no score'}
-            </AText>
-          </Animated.View>
-        ) : (
-          <AText variant="caption" color="textMute" upper>
-            Waiting for the first dart
-          </AText>
-        )}
-      </View>
+    <View
+      style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
+      onLayout={(e) => setStageBox({ width: Math.round(e.nativeEvent.layout.width), height: Math.round(e.nativeEvent.layout.height) })}
+    >
+      <GameStage state={state} width={stageBox.width} height={stageBox.height} accent={accent} takeout={takeout} />
     </View>
   );
 
-  const compactTurn = (
-    <View style={{ gap: s(space.sm) }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <AText variant="label" color="textMute" upper>
-          {player.name} · this turn
-        </AText>
-        <AText variant="h2" color="gold">
-          {turnTotal}
-        </AText>
-      </View>
-      <View style={{ flexDirection: 'row', gap: s(space.sm) }}>
-        {[0, 1, 2].map((i) => {
-          const d = state.turn[i];
-          return (
-            <View key={i} style={{ flex: 1 }}>
-              <DartChip index={i + 1} label={d?.segment.label} state={!d ? 'empty' : d.adjusted ? 'adjusted' : 'filled'} />
-            </View>
-          );
-        })}
-      </View>
-    </View>
-  );
-
-  const turnPanel = (
-    <View style={{ gap: s(space.sm) }}>
-      <AText variant="label" color="textMute" upper>
-        {player.name} · this turn
-      </AText>
-      {[0, 1, 2].map((i) => {
-        const d = state.turn[i];
-        return (
-          <DartChip
-            key={i}
-            index={i + 1}
-            label={d?.segment.label}
-            points={d ? points(d.segment) : undefined}
-            state={!d ? 'empty' : d.adjusted ? 'adjusted' : 'filled'}
-          />
-        );
-      })}
-      <View style={{ height: s(1), backgroundColor: palette.line, marginVertical: s(space.xs) }} />
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <AText variant="label" color="textMute" upper>
-          Turn
-        </AText>
-        <AText variant="score" color="gold">
-          {turnTotal}
-        </AText>
-      </View>
-    </View>
-  );
-
-  const controls = (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: s(space.sm), flexWrap: 'wrap' }}>
-      <AText variant="body" color="text" style={{ flex: 1, minWidth: s(150) }}>
-        {prompt}
-      </AText>
-      <AText variant="label" color="cyan" upper>
-        Demo
-      </AText>
-      <Button label="Throw" icon="🎯" size="sm" onPress={() => demo.throwDart()} preferredFocus={input === 'remote'} disabled={state.turn.length >= 3} />
-      <Button label="Board clear" icon="✋" size="sm" onPress={demo.takeout} />
-      <Button label={auto ? 'Stop' : 'Auto'} icon={auto ? '■' : '▶'} size="sm" variant="ghost" onPress={() => setAuto((a) => !a)} />
-      <Button label="Fix" icon="✎" size="sm" variant="primary" onPress={() => router.push('/fix')} />
-    </View>
+  const rail = (
+    <CommandRail
+      brand={wide ? undefined : null}
+      bleedX={frameX}
+      style={{ marginTop: s(8) }}
+      badge={
+        <RailButton
+          label="Demo"
+          icon={drawerOpen ? 'chevron-down' : 'chevron-up'}
+          variant="badge"
+          active={drawerOpen}
+          accessibilityLabel="Demo controls: simulated darts"
+          onPress={() => setDrawerOpen((o) => !o)}
+        />
+      }
+    >
+      <RailButton icon="target" label="Fix throw" preferredFocus={remote} onPress={() => router.push('/fix')} />
+      <RailButton icon="menu" label="Menu" onPress={() => setMenuOpen(true)} />
+    </CommandRail>
   );
 
   return (
-    <ScreenFrame
-      title={`Round ${state.round} / ${state.maxRounds} · ${game.name}`}
-      subtitle={`${player.name} to throw`}
-      right={<Button label="Menu" size="sm" variant="ghost" onPress={() => setMenuOpen(true)} />}
-    >
-      {wide ? (
-        <View style={{ flex: 1, flexDirection: 'row', gap: s(space.lg) }}>
-          <Panel style={{ width: s(210), gap: s(space.sm) }}>
-            <AText variant="label" color="textMute" upper>
-              Standings
-            </AText>
-            {standings}
-          </Panel>
-          {stage}
-          <Panel style={{ width: s(210) }}>{turnPanel}</Panel>
-        </View>
-      ) : (
-        <ScrollView contentContainerStyle={{ gap: s(space.md), paddingBottom: s(space.md) }}>
-          {standings}
-          <Panel>{compactTurn}</Panel>
-          {stage}
-        </ScrollView>
-      )}
-      {banner ? <Banner key={state.banner} {...banner} /> : null}
-      {controls}
+    <View style={{ flex: 1, backgroundColor: arcade.bg }}>
+      <StageBackdrop gameId={state.gameId} accent={accent} />
+      <View style={{ flex: 1, paddingLeft: frameX, paddingRight: frameX, paddingTop: frameTop, paddingBottom: frameBottom }}>
+        {wide ? (
+          <View style={{ flex: 1, flexDirection: 'row', gap: s(16) }}>
+            <View style={{ width: columnW, paddingTop: s(12) }}>{upNow}</View>
+            <View style={{ flex: 1, gap: s(4) }}>
+              {/* Plaques stay above the stage, which may draw up behind the title. */}
+              <StagePlaque kind="title" title={game.name} kicker={round} accent={accent} style={{ zIndex: 2 }} />
+              {stage}
+              <View style={{ zIndex: 2 }}>{instruction}</View>
+            </View>
+            <View style={{ width: columnW, paddingTop: s(12) }}>{queue}</View>
+          </View>
+        ) : (
+          <View style={{ flex: 1, gap: s(8) }}>
+            <StagePlaque kind="title" title={game.name} kicker={round} accent={accent} style={{ transform: [{ scale: 0.72 }], marginVertical: -s(12) }} />
+            {upNow}
+            {stage}
+            {instruction}
+            {queue}
+          </View>
+        )}
+        {rail}
+      </View>
+
+      {drawerOpen ? (
+        <DemoDrawer
+          auto={auto}
+          onToggleAuto={() => setAuto((a) => !a)}
+          onClose={() => setDrawerOpen(false)}
+          canThrow={state.turn.length < 3 && !takeout}
+          // Over the stage, clear of the darts (Up now) and of the instruction / warning plaque.
+          style={
+            wide
+              ? { position: 'absolute', left: frameX + columnW + s(16), right: frameX + columnW + s(16), bottom: frameBottom + s(124) }
+              : { position: 'absolute', left: frameX, right: frameX, bottom: frameBottom + s(170) }
+          }
+        />
+      ) : null}
 
       <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(5,7,14,0.82)', alignItems: 'center', justifyContent: 'center', padding: s(space.xl) }}>
-          <Panel style={{ width: Math.min(width - s(space.xl) * 2, s(380)), gap: s(space.sm) }}>
-            <AText variant="h2" upper color="gold">
-              Paused
+        <View style={{ flex: 1, backgroundColor: 'rgba(3,7,17,0.82)', alignItems: 'center', justifyContent: 'center', padding: s(24) }}>
+          <ArcadePanel heading="Paused" accent={accent} style={{ width: Math.min(width - s(48), s(340)) }} contentStyle={{ gap: s(8), padding: s(14) }}>
+            <AText variant="cond" color="textDim" align="center">
+              {`${game.name} · ${round}`}
             </AText>
-            <Button label="Resume" icon="▶" variant="primary" preferredFocus onPress={() => setMenuOpen(false)} />
-            <Button
+            <RailButton icon="play" label="Resume" variant="solid" preferredFocus onPress={() => setMenuOpen(false)} />
+            <RailButton
+              icon="target"
               label="Fix throws"
-              icon="✎"
+              variant="solid"
               onPress={() => {
                 setMenuOpen(false);
                 router.push('/fix');
               }}
             />
-            <AText variant="label" color="textMute" upper style={{ marginTop: s(space.sm) }}>
-              Demo: show a board state
-            </AText>
-            <View style={{ flexDirection: 'row', gap: s(space.sm), flexWrap: 'wrap' }}>
-              {(['offline', 'review', 'stuck'] as const).map((b) => (
-                <Button
-                  key={b}
-                  label={b === 'offline' ? 'Offline' : b === 'review' ? 'Needs review' : 'Stuck'}
-                  size="sm"
-                  variant="ghost"
-                  onPress={() => {
-                    demo.setBanner(b);
-                    setMenuOpen(false);
-                  }}
-                />
-              ))}
-            </View>
-            <View style={{ height: s(1), backgroundColor: palette.line, marginVertical: s(space.xs) }} />
-            <Button
+            <RailButton
+              icon="stop"
               label="End game now"
+              variant="solid"
               onPress={() => {
                 setMenuOpen(false);
                 demo.finish();
               }}
             />
-            <Button
+            <RailButton
+              icon="arrow-left"
               label="Quit to games"
-              variant="danger"
+              variant="solid"
               onPress={() => {
                 setMenuOpen(false);
                 router.dismissTo('/games');
               }}
             />
-          </Panel>
+          </ArcadePanel>
         </View>
       </Modal>
-    </ScreenFrame>
+    </View>
   );
 }
