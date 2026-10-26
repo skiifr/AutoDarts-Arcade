@@ -205,6 +205,7 @@ describe('frame and payload limits', () => {
     const anomaly = ofType(rig.facts, 'SourceAnomaly').find((a) => a.correlationId !== undefined);
     const [dart] = ofType(rig.facts, 'DartDetected');
     expect(dart?.payload.segment.label).toBe('MISS');
+    expect(dart?.payload.pendingReview).toBe(true);
     expect(anomaly?.payload.note).toMatch(/pending review/);
     expect(anomaly?.correlationId).toBeDefined();
     expect(dart?.correlationId).toBe(anomaly?.correlationId);

@@ -20,6 +20,9 @@ import { isLifecycle, relate, takeoutBegins, type Snapshot } from './snapshot';
  *   which would retract, change or replace known darts; those are confirmed with a
  *   `GET /api/state` first, so a late or duplicated frame can never withdraw or
  *   re-add a dart.
+ * - A dart whose segment cannot be read is reported as a miss with `pendingReview: true`
+ *   (§7.3), and the fact carries the anomaly so the adapter can log a correlated
+ *   `SourceAnomaly` for diagnostics.
  */
 
 export interface KnownDart {
@@ -356,6 +359,7 @@ export class VisitTracker {
     };
     if (t.coords) payload.coords = t.coords;
     if (recovered) payload.recovered = true;
+    if (t.fatal) payload.pendingReview = true;
     out.push(t.fatal ? { type: 'DartDetected', payload, anomaly: t.fatal } : { type: 'DartDetected', payload });
     const known: KnownDart = { throwId, segment: t.segment, indexInVisit: index };
     if (t.coords) known.coords = t.coords;
@@ -369,6 +373,7 @@ export class VisitTracker {
     if (!sameSegment(k.segment, t.segment) || relate(k, t) === 'other') {
       const payload: EventOf<'DartUpdated'>['payload'] = { throwId: k.throwId, previous: k.segment, segment: t.segment };
       if (t.coords) payload.coords = t.coords;
+      if (t.fatal) payload.pendingReview = true;
       out.push(t.fatal ? { type: 'DartUpdated', payload, anomaly: t.fatal } : { type: 'DartUpdated', payload });
     }
     const next: KnownDart = { throwId: k.throwId, segment: t.segment, indexInVisit: k.indexInVisit };

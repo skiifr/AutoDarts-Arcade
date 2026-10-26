@@ -90,6 +90,15 @@ describe('envelope rules', () => {
     expect(ArcadeEventSchema.safeParse(event).success).toBe(false);
   });
 
+  it('marks an unreadable dart pendingReview (true or absent, nothing else)', () => {
+    const dart = { throwId: THROW, segment: makeSegment(20, 1), visitKey: ulid(5), indexInVisit: 0 };
+    const update = { throwId: THROW, previous: makeSegment(20, 1), segment: makeSegment(20, 1) };
+    expect(ArcadeEventSchema.safeParse(envelope(2, 'DartDetected', { ...dart, pendingReview: true })).success).toBe(true);
+    expect(ArcadeEventSchema.safeParse(envelope(2, 'DartDetected', { ...dart, pendingReview: false })).success).toBe(false);
+    expect(ArcadeEventSchema.safeParse(envelope(2, 'DartUpdated', { ...update, pendingReview: true })).success).toBe(true);
+    expect(ArcadeEventSchema.safeParse(envelope(2, 'DartUpdated', { ...update, pendingReview: 'yes' })).success).toBe(false);
+  });
+
   it('rejects a fourth dart index', () => {
     const e = envelope(2, 'DartDetected', {
       throwId: THROW,

@@ -189,11 +189,26 @@ describe('§6.2 snapshot diff (live)', () => {
     expect(step(t, s)).toEqual(['detect 0:T20', 'detect 1:T20', 'detect 2:T5']);
   });
 
-  it('an unreadable dart is a miss with an anomaly attached', () => {
+  it('an unreadable dart is a miss pending review, with an anomaly attached', () => {
     const t = online();
     const s = snap('Throw', 'Throw detected');
     s.throws.push({ segment: { number: 0, multiplier: 0, bed: 'miss', label: 'MISS' }, fatal: { note: 'x', rawExcerpt: '{}' }, notes: [] });
-    expect(step(t, s)).toEqual(['detect 0:MISS anomaly']);
+    const [fact] = t.apply(s, 'live');
+    expect(show([fact!])).toEqual(['detect 0:MISS anomaly']);
+    expect(fact?.type === 'DartDetected' && fact.payload.pendingReview).toBe(true);
+    // A readable dart carries no flag.
+    const [next] = t.apply(throwing(A, A), 'live').filter((f) => f.type === 'DartDetected');
+    expect(next?.type === 'DartDetected' && next.payload.pendingReview).toBeUndefined();
+  });
+
+  it('a dart re-read as unreadable is updated to a miss pending review', () => {
+    const t = online();
+    step(t, throwing(C));
+    const s = snap('Throw', 'Throw detected');
+    s.throws.push({ segment: { number: 0, multiplier: 0, bed: 'miss', label: 'MISS' }, coords: C.coords, fatal: { note: 'x', rawExcerpt: '{}' }, notes: [] });
+    const [fact] = t.apply(s, 'live');
+    expect(show([fact!])).toEqual(['update T5->MISS']);
+    expect(fact?.type === 'DartUpdated' && fact.payload.pendingReview).toBe(true);
   });
 });
 

@@ -51,7 +51,14 @@ export const DartDetected = defineEvent(
     coords: CoordsSchema.optional(),
     visitKey: VisitKeySchema,
     indexInVisit: DartIndexSchema,
+    /** First seen in a resync snapshot (§6.4): the host scores it and flags the turn. */
     recovered: z.literal(true).optional(),
+    /**
+     * The adapter could not read the board's segment (§7.3, "anything else"): `segment` is a
+     * miss standing in for it. A `SourceAnomaly` with the same `correlationId` keeps the raw
+     * excerpt; the host flags the dart's turn `needsReview`.
+     */
+    pendingReview: z.literal(true).optional(),
   }),
 );
 
@@ -62,6 +69,8 @@ export const DartUpdated = defineEvent(
     previous: SegmentSchema,
     segment: SegmentSchema,
     coords: CoordsSchema.optional(),
+    /** The board re-read the dart as something the adapter could not read; see `DartDetected`. */
+    pendingReview: z.literal(true).optional(),
   }),
 );
 

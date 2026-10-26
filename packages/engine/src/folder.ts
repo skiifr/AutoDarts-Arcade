@@ -78,6 +78,8 @@ export interface BoardDart {
   readonly visitKey: string;
   segment: Segment;
   readonly recovered: boolean;
+  /** The adapter could not read its latest segment (`pendingReview`): its turn is flagged. */
+  pendingReview: boolean;
   withdrawn: boolean;
   /** What was going on when the board reported it. */
   readonly phase: 'baseline' | 'turn' | 'review' | 'idle';
@@ -355,7 +357,14 @@ export class SessionFolder {
         return this.onDartDetected(e);
       case 'DartUpdated': {
         const bd = this.boardDarts.get(e.payload.throwId);
-        if (bd) bd.segment = e.payload.segment;
+        if (bd) {
+          bd.segment = e.payload.segment;
+          const pending = e.payload.pendingReview === true;
+          if (bd.pendingReview !== pending) {
+            bd.pendingReview = pending;
+            if (bd.attributedTo !== null) this.touch(bd.attributedTo);
+          }
+        }
         return;
       }
       case 'DartWithdrawn': {
@@ -513,6 +522,7 @@ export class SessionFolder {
       visitKey: p.visitKey,
       segment: p.segment,
       recovered: p.recovered === true,
+      pendingReview: p.pendingReview === true,
       withdrawn: false,
       phase,
       eventId: e.eventId,
@@ -624,6 +634,7 @@ export class SessionFolder {
         points: points(d.segment),
         origin: d.origin,
         padded: d.padded,
+        pendingReview: this.boardDarts.get(d.throwId)?.pendingReview ?? false,
         scored: status?.scored ?? false,
         greyedBy: status?.greyedBy ?? null,
         adjusted: d.adjusted,

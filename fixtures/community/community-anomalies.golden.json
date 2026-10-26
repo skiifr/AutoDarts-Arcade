@@ -91,7 +91,8 @@
       "coords": {
         "x": 0.33,
         "y": 0.12
-      }
+      },
+      "pendingReview": true
     },
     "source": {
       "kind": "autodarts-local",

@@ -28,6 +28,8 @@ export interface DartView {
   origin: DartOrigin;
   /** An automatic miss added at an observed takeout by the `missingDartsAreMisses` house rule. */
   padded: boolean;
+  /** The board's reading could not be understood; the dart stands as a miss and its turn is flagged. */
+  pendingReview: boolean;
   /** False when the dart is recorded but greyed out (after a bust, after the game ended, a 4th dart). */
   scored: boolean;
   greyedBy: GreyReason | null;
@@ -51,7 +53,10 @@ export interface TurnView {
   voidedDarts: readonly VoidedDartView[];
   ended: boolean;
   endReason: TurnEndReason | null;
-  /** Flagged by owner decision R (recovered darts, an inferred takeout, a board reset, a 4th dart). */
+  /**
+   * Flagged by owner decision R (recovered darts, an inferred takeout, a board reset, a 4th dart)
+   * or because a dart could not be read (`pendingReview`).
+   */
   needsReview: boolean;
   reviewed: boolean;
   /** Why the game stopped scoring this visit early, if it did. Derived on every fold. */

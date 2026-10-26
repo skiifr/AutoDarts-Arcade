@@ -421,7 +421,10 @@ export class Decider {
       for (let i = f.liveCount(turn); i < 3; i++) this.pad(turn, i, o.causationId);
     }
     const live = f.liveDarts(turn);
-    const needsReview = o.flag || live.length > 3 || live.some((d) => d.origin === 'recovered');
+    const needsReview =
+      o.flag ||
+      live.length > 3 ||
+      live.some((d) => d.origin === 'recovered' || f.boardDart(d.throwId)?.pendingReview === true);
     this.batch.emit({
       type: 'TurnEnded',
       payload: {

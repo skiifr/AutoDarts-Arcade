@@ -7,6 +7,7 @@ export interface DartOnBoard {
   segment: Segment;
   coords?: Coords;
   recovered?: true;
+  pendingReview?: true;
   source: EventSource;
   occurredAt: string;
 }
@@ -40,6 +41,7 @@ export class BoardVisitTracker {
         };
         if (p.coords) dart.coords = p.coords;
         if (p.recovered) dart.recovered = true;
+        if (p.pendingReview) dart.pendingReview = true;
         this.darts.set(p.throwId, dart);
         return;
       }
@@ -48,6 +50,8 @@ export class BoardVisitTracker {
         if (dart) {
           dart.segment = fact.payload.segment;
           if (fact.payload.coords) dart.coords = fact.payload.coords;
+          if (fact.payload.pendingReview) dart.pendingReview = true;
+          else delete dart.pendingReview;
         }
         return;
       }

@@ -451,7 +451,8 @@ export class AutodartsLocalAdapter implements BoardSource {
 
   private emitTrackerFact(f: TrackerFact, correlationId: string | undefined): void {
     if ((f.type === 'DartDetected' || f.type === 'DartUpdated') && f.anomaly) {
-      // The dart is kept as a miss pending review; the anomaly shares its correlationId.
+      // The dart is kept as a miss with `pendingReview` (the host flags its turn); the
+      // anomaly that explains it shares its correlationId.
       const cid = correlationId ?? this.o.ids();
       this.emit({ type: 'SourceAnomaly', payload: { note: f.anomaly.note, rawExcerpt: f.anomaly.rawExcerpt } }, cid);
       this.emit({ type: f.type, payload: f.payload } as FactBody, cid);

@@ -376,6 +376,7 @@ export class SessionHost {
           visitKey: d.visitKey,
           indexInVisit: d.indexInVisit,
           ...(d.recovered ? { recovered: true as const } : {}),
+          ...(d.pendingReview ? { pendingReview: true as const } : {}),
         },
         source: d.source,
         occurredAt: d.occurredAt,
