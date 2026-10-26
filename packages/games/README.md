@@ -24,8 +24,8 @@ Game modules for AutoDarts Arcade: pure rules that the engine folds the event lo
    checks the id is unique, the defaults parse, the folder has its rules and fixtures, and
    that seeded random games run to a full ranking without mutating state, the same turn for
    turn through the engine's `SessionHost`.
-3. Run `yarn run check` and `yarn workspace @arcade/games coverage`. Every `module.ts` must
-   have **100 % branch coverage** from its own tests.
+3. Run `yarn verify` and `yarn coverage`. Every `module.ts` must have **100 % branch
+   coverage** from its own tests; CI fails otherwise.
 
 ### A tiny example
 

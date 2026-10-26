@@ -14,6 +14,7 @@
     "lint": "eslint .",
     "typecheck": "tsc -p packages/event-schema && tsc -p packages/engine && tsc -p packages/games && tsc -p packages/adapters && tsc -p packages/platform && tsc -p packages/ui-kit && tsc -p apps/arcade && tsc -p apps/devtools/fake-board && tsc -p apps/devtools/fault-proxy && tsc -p apps/devtools/headless-runner",
     "test": "vitest run",
+    "coverage": "yarn workspace @arcade/games coverage",
     "verify": "yarn lint && yarn typecheck && yarn test",
     "web": "yarn --cwd apps/arcade web",
     "export:web": "yarn --cwd apps/arcade export:web",

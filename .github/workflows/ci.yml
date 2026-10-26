@@ -21,5 +21,9 @@ jobs:
       - run: yarn lint
       - run: yarn typecheck
       - run: yarn test
+      - name: Games coverage gate (100 % branches in every module.ts)
+        run: yarn coverage
+      - name: Headless runner smoke test (a Siege fixture through the engine, in Node)
+        run: yarn play-headless --game siege --script packages/games/src/siege/fixtures/hard-last-standing.json
       - name: Web export smoke build
         run: yarn export:web
