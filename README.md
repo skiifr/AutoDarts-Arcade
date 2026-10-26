@@ -11,13 +11,14 @@ An arcade-style party-game frontend for an existing camera-scored steel-tip dart
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Research findings (Autodarts 2.x, licensing, community projects, Pi 4, Fire TV / Vega), system design, event schema, game engine, wireframes, and the verified-vs-assumed ledger |
 | [ROADMAP.md](ROADMAP.md) | Owner decisions Q1–Q6, six implementation phases with gates, acceptance criteria, and the testing strategy |
 | [RISK-REGISTER.md](RISK-REGISTER.md) | 27 scored technical, legal and platform risks with mitigations |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to run the checks, the package dependency rule, the code-reuse rule and commit conventions |
 
 ## Getting started
 
 ```sh
 yarn install
 yarn web      # browser preview; add ?input=remote to the URL for the TV layout
-yarn check    # lint + typecheck + unit tests
+yarn verify   # lint + typecheck + unit tests
 ```
 
 Device builds (TestFlight, Android APK, Fire TV APK) are described in [apps/arcade/README.md](apps/arcade/README.md).
