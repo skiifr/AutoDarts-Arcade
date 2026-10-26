@@ -5,7 +5,8 @@
 > **Confirmed scope (owner, 2026-10-26):**
 > - **Private home use**, non-commercial. The owner reports that Autodarts staff permitted this via their Discord.
 > - TV target: **Fire TV Stick 4K Max (Fire OS)**.
-> - Distribution by direct install; no public store listings.
+> - Distribution with no public store listings: **TestFlight** for iPhone and iPad (paid Apple Developer account); ADB sideload for Fire TV and Android.
+> - Detection host: the current **Raspberry Pi 4 through Phase 5**. An upgrade is considered only if the post-P5 **H1 hardware review** proves it's needed.
 > - See [ROADMAP Q1–Q6](ROADMAP.md#owner-decisions-answered-2026-10-26).
 > **Companion documents:** [ROADMAP.md](ROADMAP.md) · [RISK-REGISTER.md](RISK-REGISTER.md)
 
@@ -51,7 +52,7 @@ Every factual claim carries one of these marks. Bracketed IDs refer to [§12 Sou
 | D4 | **The engine is event-sourced.** Game state is a pure fold over an append-only log, and corrections are new events that trigger a replay. | It makes corrections, crash recovery, reconnection and testing one mechanism instead of four. |
 | D5 | **The host device is the single writer.** | The device showing the game owns the log. Phones send *commands*, which removes multi-device conflicts. |
 | D6 | **Phase 1 opens with a go/no-go hardware probe.** | Whether Autodarts **2.x** still streams throws locally is *disputed* (🟡[C3][C2] say yes, 🟡[C4] says no). Everything else depends on it. |
-| D7 | **Private home use, installed directly.** APK sideload onto the 4K Max and Android; iOS internal distribution. No store listings. | Owner decision. The GPL, app-name and App Review concerns only apply to public store releases ✅[P21][P24]. Commercial use stays out of scope ✅[S3]. |
+| D7 | **Private home use, installed directly.** APK sideload onto the 4K Max and Android; TestFlight on iOS. No store listings. | Owner decision. The GPL, app-name and App Review concerns only apply to public store releases ✅[P21][P24]. Commercial use stays out of scope ✅[S3]. |
 
 ---
 
@@ -262,7 +263,12 @@ Practical Pi hygiene, all outside our scope:
 - Use 800×600 camera resolution, which is "absolutely fine" ✅[S4].
 - Watch temperature and per-camera FPS.
 
-If detection proves unreliable in Phase 1, a Pi 5 or mini PC is a drop-in upgrade, because the app only needs `IP:3180`.
+**Owner decision: the Pi 4 stays through Phase 5.** The software must therefore cope with it:
+- zero added load;
+- correction-first UX;
+- recovery from missed darts.
+
+A per-session **board-health log** (§9.7) feeds the **H1 hardware review** after P5 (ROADMAP). Only if H1 proves the need is the Pi replaced with a Pi 5 or mini PC. That is a drop-in change, because the app only needs `IP:3180`.
 
 ### 4.7 Native platform landscape
 
@@ -337,7 +343,7 @@ Reanimated's own guidance is no more than ~100 animated components on low-end An
 | Language | TypeScript (strict) everywhere | — |
 | Mobile + Fire OS app | Expo (prebuild / dev client, no Expo Go on TV ✅[P13]) + `react-native-tvos`. **Candidate: Expo SDK 56 + `react-native-tvos@0.85-stable`**, which is documented for TV and within 2 minors of Vega's RN 0.83 ✅[P13][P3]. Final pick at the end of Phase 1 | ⚪ |
 | Vega app (backlog) | React Native for Vega (RN 0.83 track), Yarn workspace `apps/vega`, platform files `*.kepler.tsx` ✅[P10]. Not needed for the 4K Max. Shared packages stay Vega-compatible so this remains cheap | ⚪ |
-| Private distribution | Fire TV / Android: APK sideload via `adb` ✅[P26]. iOS / iPadOS: TestFlight internal 🟡[P27] or ad hoc internal distribution ⚪. Picked in P1 | ⚪ |
+| Private distribution | Fire TV / Android: APK sideload via `adb` ✅[P26]. iOS / iPadOS: **TestFlight internal testing** (owner has a paid Apple Developer account). Builds expire after 90 days 🟡[P27], so a fresh build is uploaded at least every 90 days | decided |
 | Animation | Reanimated 4 + react-native-svg + Lottie (all targets). Skia v2 as an optional "high" tier on non-Vega | ✅ availability / ⚪ performance |
 | Navigation and focus | React Navigation (Expo TV ✅[P13]). TV focus via `TVFocusGuideView` / `nextFocus*`. Vega `FocusManager` ✅[P5] | Vega navigation library ⚪ |
 | Audio | `AudioPort` interface: `expo-audio` on Expo; W3C media API on Vega 🟡 | ⚪ |
@@ -704,6 +710,27 @@ Before release, names and mechanics are checked against BattleUp's catalogue so 
 - Uses: name entry, quick corrections, and acting as the "operator".
 - On Vega, listening sockets are unknown ⚪, so the companion is unavailable there unless the spike proves otherwise.
 
+### 9.7 Board-health log (evidence for the H1 hardware review)
+
+The Pi 4 stays until after Phase 5 (§4.6), so the app quietly collects the evidence needed to decide whether it should be replaced.
+
+**Board telemetry**
+- Per-camera FPS and overall detection FPS, sampled **every 30 s during games only**, from the allowlisted `/api/state/stats` and `/api/cams/stats` 🟡[C2].
+- Adds ≤ 2 small requests per 30 s, well within NF8.
+
+**Detection quality, derived from the event log at no extra cost**
+- Missed on-board darts.
+- Misread darts.
+- `needsReview` turns.
+- Stuck takeouts.
+- Reconnects.
+
+Bounce-outs are kept separate, because no hardware can detect them.
+
+**Not readable through the API:** thermal throttling. The owner runs `vcgencmd get_throttled` on the Pi at the P1 baseline and again at H1. This is read-only.
+
+**Storage and privacy:** all data stays on-device. W1's Settings shows a per-session summary, and a share-sheet export provides the H1 report input.
+
 ---
 
 ## 10. Wireframes
@@ -862,11 +889,11 @@ Game names are original placeholders.
 | mDNS `_autodarts-board._tcp` on 2.x | 🟡[C15] → 🔬 |
 | Board needs the internet at start | ✅[S4] (v1 FAQ) / 🟡 for v2 → 🔬 |
 | Pi 4 marginal for detection; don't render on it | ✅[S4] |
-| Your Pi's actual CPU, thermal and FPS headroom | 🔬 |
+| Your Pi 4's actual CPU, thermal and FPS headroom | 🔬 P1 baseline → H1 review after P5 |
 | ToS bans unauthorised third-party / commercial use | ✅[S3] |
 | Autodarts staff permit this project for private home use | **Owner-attested** (Autodarts Discord); not independently verified |
 | Your TV stick (4K Max) runs Fire OS and accepts ADB sideloading | ✅[P1][P26] → 🔬 install dry run in P1 |
-| iOS private install: TestFlight internal builds last 90 days; a free Apple ID re-signs every 7 days | 🟡[P27] / 🟡 → decided in P1 |
+| iOS private install via TestFlight on the owner's paid Apple Developer account | decided (owner); 90-day build lifetime 🟡[P27] |
 | No official third-party API or client IDs | ✅ (none published) / 🟡[C13] (Autodarts' reply) |
 | Fire TV models and their OS (Fire OS vs Vega) | ✅[P1] |
 | Vega can't run APKs; all future sticks Vega (affects only a future replacement stick) | 🟡[P11] |

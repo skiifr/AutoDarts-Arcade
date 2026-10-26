@@ -24,11 +24,11 @@
 | # | Question | Answer → consequence |
 |---|---|---|
 | **Q1** | Which Fire TV Stick? | **Fire TV Stick 4K Max.** Both generations run **Fire OS** (1st gen 2021: Fire OS 7; 2nd gen 2023: Fire OS 8; 2 GB RAM each) ✅[P1]. The stick runs the **same Android build** as phones. The Vega track drops to an optional backlog item (R04, R05) |
-| **Q2** | Private use or public store listing? | **Private home use.** Distribution is direct install: an APK sideloaded onto the 4K Max and Android devices ✅[P26], and iOS internal distribution (P1 picks TestFlight-internal vs ad hoc) (R27). No store listings |
+| **Q2** | Private use or public store listing? | **Private home use.** No store listings. Fire TV Stick 4K Max and Android: APK sideloaded via ADB ✅[P26]. iPhone and iPad: **TestFlight internal testing** on the owner's paid Apple Developer account |
 | **Q3** | Commercial or venue use? | **No.** Owner reports that Autodarts staff permitted private home use via their Discord. *Owner-attested; not independently verified.* Keep a screenshot or link of that permission (R03) |
 | **Q4** | GPL app-store exception? | **Not needed for private use.** You are the sole copyright holder, so the GPL doesn't restrict your own installs. Revisit only before accepting outside contributions or publishing (R07) |
 | **Q5** | Product name | **Keep "AutoDarts Arcade"** for home use. Revisit only if it's ever published (R08) |
-| **Q6** | Upgrade the detection host if the Pi 4 proves unreliable? | *Open.* Default: stay on the Pi 4 and measure in P1 |
+| **Q6** | Upgrade the detection host if the Pi 4 proves unreliable? | **Only after Phase 5, and only if proven.** P1–P5 must work on the current Pi 4. Evidence is collected throughout, and the **H1 hardware review** after P5 decides (see below) |
 
 ---
 
@@ -43,6 +43,7 @@ flowchart LR
   P3 --> P4
   P4 --> P5["P5 Arcade games, effects & art"]
   P5 --> P6["P6 Companion & home-release hardening"]
+  P5 -.->|"H1: hardware review"| HW["Optional detection-host upgrade"]
 ```
 
 - **P2 and P3 run in parallel** once the event schema (P1) is frozen. P3 develops against the simulator adapter and recorded fixtures, so it doesn't need P2's live adapter.
@@ -50,11 +51,12 @@ flowchart LR
 
 | Phase | Depends on | Unblocks | Gate to exit |
 |---|---|---|---|
-| P1 | P0 accepted (Q1–Q5 answered, Q6 defaulted) | P2, P3 | **G1** go/no-go on the local throw stream |
+| P1 | P0 accepted (Q1–Q6 answered) | P2, P3 | **G1** go/no-go on the local throw stream |
 | P2 | P1 (G1 = go) | P4 | Chaos suite green |
 | P3 | P1 (schema) | P4 | Replay-equivalence suite green |
 | P4 | P2, P3 | P5 | Full game playable on every device class |
-| P5 | P4 | P6 | Performance budgets met on the weakest target |
+| P5 | P4 | P6, H1 | Performance budgets met on the weakest target |
+| H1 | P5 + health data from P2–P5 | optional hardware upgrade | Written upgrade / no-upgrade decision |
 | P6 | P5 | home release | Soak test, installed on all your devices |
 
 ---
@@ -78,7 +80,7 @@ flowchart LR
    - Wi-Fi drop on the display side;
    - board-host reboot;
    - internet unplugged at the board.
-3. **Pi health baseline:** CPU, temperature and per-camera FPS (from `/api/cams/stats` and the Pi's own tools) across a 30-minute session. Also impact → frame latency, filmed at 240 fps against the frame timestamps.
+3. **Pi 4 health baseline:** CPU, temperature, throttling and per-camera FPS (from `/api/cams/stats` and the Pi's own tools, e.g. `vcgencmd get_throttled`) across a 30-minute session. Also impact → frame latency, filmed at 240 fps against the frame timestamps. This baseline is the reference point for the **H1 review** after P5.
 4. **Monorepo:** Yarn workspaces, TS strict, ESLint dependency rules (§5.3), Vitest, and CI (lint, typecheck, unit tests).
 5. **`packages/event-schema` v1:** zod types, JSON Schema generation, validation of all fixtures through a *throwaway* normalizer.
 6. **App skeleton** (`apps/arcade`, Expo + `react-native-tvos`):
@@ -87,15 +89,16 @@ flowchart LR
    - a raw "dart ticker" that shows live darts from the board.
 7. **Private-install dry run.**
    - *Fire TV:* enable Developer Options → ADB debugging and Apps from Unknown Sources on the 4K Max ✅[P26], then install the APK over the network with `adb`.
-   - *iPhone / iPad:* choose between TestFlight internal testing (builds expire after 90 days 🟡[P27]) and ad hoc "internal distribution" (device-registered, longer-lived profile ⚪). Both need a paid Apple Developer Program membership ⚪. A free Apple ID re-signs every 7 days 🟡, which is impractical.
-   - Write the chosen steps into `docs/install.md`.
+   - *iPhone / iPad:* **TestFlight internal testing** on the owner's paid Apple Developer account. Build with EAS or Xcode, upload, and install from the TestFlight app.
+   - Write both routes into `docs/install.md`.
 8. **Repo housekeeping:** add a `CONTRIBUTING.md` with the code-reuse rule (ARCHITECTURE §4.5), so the private-use licence position stays clean.
 
 **Acceptance criteria**
 - [ ] **G1:** a written verdict on whether *your* board's version streams throws on `/api/events`, with the fixture that proves it. **No-go** triggers the contingency below.
 - [ ] Every 🟡/🔬 row in ARCHITECTURE §11 is updated to ✅ or ❌ with evidence.
 - [ ] ≥ 10 scripted fixtures are committed, each with an expectation file.
-- [ ] The app installs **through the chosen private route** and shows live darts on **iPhone, iPad and the Fire TV Stick 4K Max** (plus an Android phone or emulator), with the iOS Local Network prompt handled.
+- [ ] The app installs (TestFlight on iOS, ADB on Fire TV) and shows live darts on **iPhone, iPad and the Fire TV Stick 4K Max** (plus an Android phone or emulator), with the iOS Local Network prompt handled.
+- [ ] Pi 4 baseline report committed (`docs/hardware/pi4-baseline.md`).
 - [ ] `docs/install.md` lets you reinstall or update every device without help.
 - [ ] The Expo SDK / `react-native-tvos` version is chosen and recorded as an ADR.
 - [ ] CI is green on `main`.
@@ -125,6 +128,7 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
   - `LogStore` (SQLite on Expo);
   - `Discovery`: mDNS, last-known, manual, probe.
 - Session host core: seq assignment, write-ahead persistence, crash-resume, raw-frame ring buffer, diagnostics export.
+- **Board-health log** (ARCHITECTURE §9.7), feeding the H1 review. It records per-camera FPS, sampled every 30 s during games, and detection-quality metrics derived from the event log.
 - `apps/devtools/fault-proxy`: a laptop-side WebSocket proxy that drops, delays, duplicates and cuts frames between the board and the app.
 
 **Acceptance criteria**
@@ -239,6 +243,33 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
 
 ---
 
+## H1: Hardware review (after Phase 5)
+
+**Purpose:** decide, from evidence, whether the Raspberry Pi 4 detection host should be upgraded. Until this point the Pi 4 is the supported hardware, and nothing in P1–P5 may depend on an upgrade.
+
+**Inputs**
+- The P1 baseline.
+- The board-health logs from every real session played during P2–P5 (aim for ≥ 10 sessions).
+- A repeat of the P1 measurement on the Pi.
+
+**"Proven" means any one of these thresholds is met.** The thresholds are ⚪ proposals, to be calibrated against the P1 baseline and agreed at the end of P1.
+
+| Signal | Threshold | Source |
+|---|---|---|
+| **Missed on-board darts**: auto-padded misses the user corrected to a scoring segment, plus darts the user added by hand (`DartAdded` from `source.kind: 'manual'`), ÷ all darts. Bounce-outs are excluded because no hardware detects them | > 5 % across ≥ 10 sessions | event log |
+| **Misread darts**: `DartCorrected{reason:'user'}` on detected darts ÷ detected darts | > 5 % across ≥ 10 sessions | event log |
+| Camera FPS | any camera below 10 fps for > 10 % of game time | board-health log |
+| Thermal throttling during play | any throttling flag in the repeat measurement | `vcgencmd get_throttled` |
+| Detection latency (impact → frame) | median > 1 s | P1 method, repeated |
+
+The causes of a breach matter:
+- **If only the correction thresholds are breached**, first rule out calibration, lighting and camera placement. These are free fixes and not a Pi problem.
+- **If the hardware thresholds are breached**, recommend a Pi 5 or mini PC. The app needs no change, because it only needs `IP:3180`.
+
+**Output:** `docs/hardware/h1-review.md`, with the numbers, the decision and, if upgrading, a re-run of the P1 golden fixtures on the new host.
+
+---
+
 ## Phase 6: Companion and home-release hardening
 
 **Goal:** add the phone companion and make the app robust enough for a 4-hour party at home.
@@ -246,7 +277,7 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
 **Scope**
 - **Phone companion** (optional): a LAN server in the host app (4K Max or iPad), QR pairing with a one-time token, and commands for name entry, corrections and operator actions.
 - **Soak and resilience:** 4-hour simulated sessions with periodic board and Wi-Fi drops.
-- **Home release:** final private builds on every household device, with a renewal reminder if the iOS route expires (R27).
+- **Home release:** final private builds on every household device. TestFlight builds expire after 90 days 🟡[P27], so a fresh build is uploaded at least every 90 days. EAS Build + Submit can automate this ⚪.
 - User documentation: setup, troubleshooting, and the "your board updated and something broke" playbook.
 
 **Acceptance criteria**

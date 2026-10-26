@@ -1,6 +1,10 @@
 # AutoDarts Arcade — Technical Risk Register (initial, Phase 0)
 
-> **Last reviewed:** 2026-10-26. Re-scored after the owner confirmed three things: **private home use**, permission from Autodarts staff (owner-attested), and a **Fire TV Stick 4K Max** as the TV.
+> **Last reviewed:** 2026-10-26. Re-scored after the owner confirmed:
+> - **private home use**, with permission from Autodarts staff (owner-attested);
+> - a **Fire TV Stick 4K Max** as the TV;
+> - **TestFlight** on a paid Apple Developer account for iOS;
+> - the **Pi 4 is kept through Phase 5**, with an upgrade only if the H1 review proves the need.
 > Review at every phase gate in [ROADMAP.md](ROADMAP.md).
 > **Evidence:** ✅ verified · 🟡 community-reported · ⚪ assumption. Source IDs ([S#], [C#], [P#]) refer to [ARCHITECTURE.md §12](ARCHITECTURE.md#12-sources).
 > **Scoring:** Likelihood (L) and Impact (I) are each rated 1–5. Score = L × I. **High ≥ 15**, Medium 8–14, Low ≤ 7.
@@ -13,7 +17,7 @@
 | R01 | Undocumented local API changes, closes or adds auth (auto-updates) | Integration | ✅ | 4 | 5 | **20 High** | P1→ongoing | Open |
 | R09 | Misdetected darts decide game outcomes | Product | 🟡 | 4 | 4 | **16 High** | P2–P4 | Open |
 | R10 | ID-less snapshot stream leads to lost or duplicated darts on reconnect | Integration | 🟡 | 4 | 4 | **16 High** | P2 | Open |
-| R11 | Pi 4 undersized for detection (dropped FPS, missed darts) | Hardware | ✅ | 4 | 4 | **16 High** | P1 | Open |
+| R11 | Pi 4 undersized for detection (dropped FPS, missed darts) | Hardware | ✅ | 4 | 4 | **16 High** | P1–P5 → H1 | **Accepted through P5**; decided at H1 |
 | R02 | Autodarts 2.x local stream may not carry throws at all | Integration | 🟡 | 3 | 5 | **15 High** | P1 (G1) | Open |
 | R06 | Effects too heavy for the 4K Max (2 GB, GE9215) | Performance | ✅/⚪ | 3 | 3 | 9 Med | P5 | Open |
 | R12 | Board needs the internet / Autodarts cloud to start | Dependency | ✅ | 3 | 3 | 9 Med | P1 | Accept + mitigate |
@@ -23,9 +27,9 @@
 | R18 | React Native / `react-native-tvos` fork lag and library gaps | Tech stack | ✅ | 3 | 3 | 9 Med | P1→P6 | Open |
 | R21 | Scope vs capacity: four device classes, original art and sound | Delivery | ⚪ | 3 | 3 | 9 Med | all | Open |
 | R26 | An Autodarts match or other tool consumes the same darts concurrently | Integration | ⚪ | 3 | 3 | 9 Med | P2 / P4 | Open |
-| R27 | **Private-install friction** (iOS signing expiry, Fire OS sideload changes) | Distribution | ✅/🟡 | 3 | 3 | 9 Med | P1 / P6 | **New** |
 | R17 | Board API key / TLS key exposed via `/api/config` and `/api/system` | Security | 🟡 | 2 | 4 | 8 Med | P2 | Open |
 | R15 | Android cleartext rules / Android 17 local-network permission | Platform | ✅ | 2 | 3 | 6 Low | P1 | Open |
+| R27 | Fire OS sideload friction (iOS resolved: TestFlight on a paid account) | Distribution | ✅/🟡 | 2 | 3 | 6 Low | P1 / P6 | Open |
 | R03 | Autodarts ToS: third-party / commercial use | Legal | ✅ + owner-attested | 1 | 5 | 5 Low | P0 | **Mitigated:** private use, staff permission |
 | R04 | Fire TV fragmentation (Vega sticks can't run the Android build) | Platform | ✅ | 1 | 4 | 4 Low | — | **Resolved for current hardware** |
 | R20 | Clock skew corrupts ordering | Data | ⚪ | 2 | 2 | 4 Low | P2 | Mitigated by design |
@@ -81,14 +85,20 @@
 ### R11 · Pi 4 undersized for detection — 16 High
 - **Cause:** Autodarts' own FAQ calls the Pi 4 "bleeding edge" ✅[S4]. A field report describes 3 cameras freezing at 0 FPS 🟡[C14].
 - **Impact:** Missed darts and latency, which Arcade can't fix in software.
-- **Mitigation:**
+- **Owner decision (Q6):** Keep the Pi 4 through Phase 5. Upgrade only if the **H1 review** proves the need. Until then the risk is *accepted*, and the software absorbs it.
+- **Mitigation through P5:**
   - Zero added Pi load (ADR-001).
-  - P1 health baseline: CPU, temperature, per-camera FPS.
-  - Run headless, with active cooling, at 800×600 ✅[S4].
-  - Show board health in W1.
-  - If needed, upgrade to a Pi 5 or mini PC. The app doesn't change (Q6).
-- **Early warning:** Camera FPS < 10, throttling flags, rising correction rate.
-- **Owner:** Owner (hardware), Lead (measurement).
+  - Free tuning: headless operation, active cooling, 800×600 ✅[S4], and checks on calibration and lighting.
+  - Correction-first UX and missed-dart recovery (R09, R10).
+  - Board health shown in W1.
+- **Evidence for H1:**
+  - P1 baseline.
+  - Board-health log on every session (ARCHITECTURE §9.7).
+  - Repeat measurement after P5.
+  - Thresholds in ROADMAP H1: > 5 % missed on-board or misread darts, cameras < 10 fps for > 10 % of game time, any throttling, or median latency > 1 s.
+- **Exit:** H1 decides upgrade or no upgrade. A Pi 5 or mini PC needs no app change and is verified by re-running the golden fixtures.
+- **Early warning:** Rising correction rate in the health log; camera FPS dips; throttling flags.
+- **Owner:** Owner (hardware decision at H1), Lead (measurement).
 
 ### R02 · Autodarts 2.x local stream may not carry throws — 15 High
 - **Cause:** Sources disagree. HomeDarts and DartLab report throws on 2.0.2 🟡[C2][C3]. ioBroker says 2.x "no longer provides throw data" 🟡[C4].
@@ -162,19 +172,20 @@
 - **Mitigation:** Guidance in W0 and W2. The board must be clear at game start. A warning if unexpected darts appear between turns.
 - **Owner:** Lead.
 
-### R27 · Private-install friction — 9 Medium (new)
-- **Cause:**
-  - **iOS:** builds signed with a free Apple ID expire after 7 days 🟡. TestFlight internal builds expire after 90 days 🟡[P27]. Ad hoc builds need registered devices ⚪. The last two need a paid Apple Developer Program membership ⚪.
-  - **Fire OS:** sideloading needs Developer Options, ADB debugging and Apps from Unknown Sources ✅[P26]. Amazon has hidden Developer Options on recent Fire OS versions; it reappears after 7 presses on *About* ✅[P26]. Sideloading could be tightened further on Fire OS ⚪. Newer Vega sticks block sideloading entirely 🟡[P11].
-- **Impact:** The app stops opening on the iPad on party night, or a Fire TV update gets in the way of reinstalling.
+### R27 · Fire OS sideload friction — 6 Low
+- **iOS: resolved.** The owner has a paid Apple Developer account, and TestFlight internal testing is the route. The only routine task is uploading a fresh build at least every 90 days 🟡[P27]. That is an operational step, not a risk, and EAS Build + Submit can automate it ⚪.
+- **Cause (Fire OS):**
+  - Sideloading needs Developer Options, ADB debugging and Apps from Unknown Sources ✅[P26].
+  - Developer Options is hidden on recent Fire OS versions and reappears after 7 presses on *About* ✅[P26].
+  - Amazon could tighten sideloading on Fire OS ⚪. Newer Vega sticks already block it 🟡[P11].
+- **Impact:** A Fire OS update makes reinstalling or updating the TV app harder.
 - **Mitigation:**
-  - Pick the iOS route in P1. Paid membership plus TestFlight internal or ad hoc gives a predictable renewal.
-  - A calendar reminder before expiry.
   - `docs/install.md` with exact `adb` steps.
   - Keep the last good APK archived.
-  - Don't let the 4K Max auto-update during a P-phase test window if that is avoidable ⚪.
-- **Early warning:** "App no longer available" on iOS; Developer Options missing after a Fire OS update.
-- **Owner:** Owner (Apple membership, devices), Lead (docs).
+  - Re-check Developer Options after Fire OS updates.
+  - Fallback: the iPad becomes the display, mirrored to the TV if wanted ⚪.
+- **Early warning:** Developer Options missing after a Fire OS update.
+- **Owner:** Owner (devices), Lead (docs).
 
 ### R17 · Board secrets exposure — 8 Medium
 - **Cause:** `/api/config` and `/api/system` return the board API key and TLS key 🟡[C2].
