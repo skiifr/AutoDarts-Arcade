@@ -9,8 +9,8 @@ An arcade-style party-game frontend for an existing camera-scored steel-tip dart
 | Document | What's in it |
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Research findings (Autodarts 2.x, licensing, community projects, Pi 4, Fire TV / Vega), system design, event schema, game engine, wireframes, and the verified-vs-assumed ledger |
-| [ROADMAP.md](ROADMAP.md) | Owner decisions Q1–Q6, six implementation phases with gates, acceptance criteria, and the testing strategy |
-| [RISK-REGISTER.md](RISK-REGISTER.md) | 27 scored technical, legal and platform risks with mitigations |
+| [ROADMAP.md](ROADMAP.md) | Owner decisions Q1–Q7, six implementation phases with gates, the H1 hardware review, acceptance criteria, and the testing strategy |
+| [RISK-REGISTER.md](RISK-REGISTER.md) | 28 scored technical, legal and platform risks with mitigations |
 
 ## Licence
 

@@ -30,6 +30,7 @@
 | R17 | Board API key / TLS key exposed via `/api/config` and `/api/system` | Security | 🟡 | 2 | 4 | 8 Med | P2 | Open |
 | R15 | Android cleartext rules / Android 17 local-network permission | Platform | ✅ | 2 | 3 | 6 Low | P1 | Open |
 | R27 | Fire OS sideload friction (iOS resolved: TestFlight on a paid account) | Distribution | ✅/🟡 | 2 | 3 | 6 Low | P1 / P6 | Open |
+| R28 | Board only reachable over Tailscale, not the same network (shed setup) | Network | ✅/⚪ | 2 | 3 | 6 Low | P1 | Open: needs Q7 |
 | R03 | Autodarts ToS: third-party / commercial use | Legal | ✅ + owner-attested | 1 | 5 | 5 Low | P0 | **Mitigated:** private use, staff permission |
 | R04 | Fire TV fragmentation (Vega sticks can't run the Android build) | Platform | ✅ | 1 | 4 | 4 Low | — | **Resolved for current hardware** |
 | R20 | Clock skew corrupts ordering | Data | ⚪ | 2 | 2 | 4 Low | P2 | Mitigated by design |
@@ -72,7 +73,7 @@
 - **Owner:** Lead.
 
 ### R10 · Lost or duplicated darts from an ID-less snapshot stream — 16 High
-- **Cause:** No throw IDs or sequence numbers, a silent socket, and takeouts that may happen while offline 🟡[C3].
+- **Cause:** No throw IDs or sequence numbers, a silent socket, and takeouts that may happen while offline 🟡[C3]. ShedDarts shows the cost of guessing the format: it expected per-dart events, so real snapshot frames were silently dropped ✅[C16].
 - **Impact:** Wrong scores, or double-counted darts.
 - **Mitigation:**
   - Snapshot diff with `(visitKey, index)` idempotency.
@@ -186,6 +187,19 @@
   - Fallback: the iPad becomes the display, mirrored to the TV if wanted ⚪.
 - **Early warning:** Developer Options missing after a Fire OS update.
 - **Owner:** Owner (devices), Lead (docs).
+
+### R28 · Board only reachable over Tailscale — 6 Low
+- **Cause:** ShedDarts linked the shed board to the house over Tailscale ✅[C16]. If the Pi and the TV / iPad aren't on the same network, the design's same-network assumption breaks.
+- **Impact:**
+  - No auto-discovery (mDNS doesn't cross the tunnel).
+  - Extra latency.
+  - The VPN must stay connected on the 4K Max and on iOS. iOS allows only one active VPN.
+- **Mitigation:**
+  - Prefer putting the TV / iPad on the shed's network.
+  - Otherwise use Tailscale on the 4K Max (Amazon Appstore ✅[P28]) and iOS, entering the board's Tailscale IP or MagicDNS name in W0.
+  - Measure latency in P1.
+  - Show VPN-down as a distinct offline reason.
+- **Owner:** Owner (Q7), Lead.
 
 ### R17 · Board secrets exposure — 8 Medium
 - **Cause:** `/api/config` and `/api/system` return the board API key and TLS key 🟡[C2].

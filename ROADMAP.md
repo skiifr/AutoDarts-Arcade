@@ -1,6 +1,6 @@
 # AutoDarts Arcade — Roadmap
 
-> **Companion documents:** [ARCHITECTURE.md](ARCHITECTURE.md) (design and evidence) · [RISK-REGISTER.md](RISK-REGISTER.md) (risks R01–R27).
+> **Companion documents:** [ARCHITECTURE.md](ARCHITECTURE.md) (design and evidence) · [RISK-REGISTER.md](RISK-REGISTER.md) (risks R01–R28).
 > Phase 0 is complete when these three documents are accepted. Phases 1–6 below are the implementation roadmap. **No code or deployment happens until Phase 1 is approved.**
 
 ---
@@ -29,6 +29,7 @@
 | **Q4** | GPL app-store exception? | **Not needed for private use.** You are the sole copyright holder, so the GPL doesn't restrict your own installs. Revisit only before accepting outside contributions or publishing (R07) |
 | **Q5** | Product name | **Keep "AutoDarts Arcade"** for home use. Revisit only if it's ever published (R08) |
 | **Q6** | Upgrade the detection host if the Pi 4 proves unreliable? | **Only after Phase 5, and only if proven.** P1–P5 must work on the current Pi 4. Evidence is collected throughout, and the **H1 hardware review** after P5 decides (see below) |
+| **Q7** | Are the Pi and the TV / iPad on the **same network** in the shed, or is the board only reachable over Tailscale (as in ShedDarts)? | *Open.* Default: same network. If Tailscale is needed, it runs on the 4K Max (Amazon Appstore ✅[P28]) and on iOS. The board is then entered by Tailscale IP, since there is no auto-discovery across the tunnel. P1 measures both paths if available (R28) |
 
 ---
 
@@ -51,7 +52,7 @@ flowchart LR
 
 | Phase | Depends on | Unblocks | Gate to exit |
 |---|---|---|---|
-| P1 | P0 accepted (Q1–Q6 answered) | P2, P3 | **G1** go/no-go on the local throw stream |
+| P1 | P0 accepted (Q1–Q6 answered, Q7 defaulted) | P2, P3 | **G1** go/no-go on the local throw stream |
 | P2 | P1 (G1 = go) | P4 | Chaos suite green |
 | P3 | P1 (schema) | P4 | Replay-equivalence suite green |
 | P4 | P2, P3 | P5 | Full game playable on every device class |
@@ -69,7 +70,10 @@ flowchart LR
 1. **Board probe** (`apps/devtools/board-probe`, runs on a laptop, read-only, nothing installed on the Pi):
    - version detection;
    - `GET /api/state` and `WS /api/events` capture;
-   - an mDNS browse.
+   - an mDNS browse;
+   - the network path from the TV / iPad to the board (same network or Tailscale, Q7), with its latency.
+
+   This replaces ShedDarts' guessed message format with real captures (ARCHITECTURE §4.8).
 2. **Scripted capture sessions** → `fixtures/`. Each one is a scripted sequence of physical actions with a written expectation. They cover:
    - normal visits and all beds (T, D, S-in, S-out, 25, 50);
    - off-board misses and bounce-outs;
@@ -158,7 +162,7 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
 - `packages/games`:
   - **Countdown** (x01 with in/out options);
   - **Cricket**;
-  - **Around the Clock**;
+  - **Around the World**, including ShedDarts' **NZ skip rule** (double +2, treble +3, finish on bull) as an option;
   - one **party prototype** (Siege rules only, no art).
 - Headless runner (`devtools`): plays any game from a fixture or script and prints standings.
 - A game-authoring guide (`packages/games/README.md`).
@@ -185,6 +189,7 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
   - theme and player colours (colour-blind-safe palette).
 - Correction flow with **dry-run preview**; provisional results; "needs review" badges.
 - Player profiles (local), guests, settings (quality tier, house rules, board control opt-in).
+- **Career stats per profile**, derived from the event log: accuracy, skip-rate, wins (from the ShedDarts wishlist).
 - Basic audio through `AudioPort`; keep-awake; Home → pause on TV.
 - **Demo mode** (simulator), for development and for trying games without the board.
 
@@ -221,7 +226,8 @@ The cloud API stays out unless Autodarts staff explicitly confirm a supported wa
   - animation presets (Reanimated, SVG, Lottie);
   - Skia v2 particles on the High tier (not on Vega);
   - quality-tier auto-selection.
-- Games: **Siege**, **Territory**, **Balloon Pop** (all original), with stage renderers and their own rules tests.
+- Games: **Siege**, **Territory**, **Balloon Pop** (all original), plus **Killer** (classic, from the ShedDarts wishlist), each with a stage renderer and its own rules tests.
+- **Announcer calls** through `AudioPort`: turn scores, doubles and trebles, "game shot", and the bull-finish fanfare ShedDarts planned. Uses your own recordings or TTS.
 - **Original asset pipeline:**
   - style guide;
   - an `ASSETS.md` provenance log (author, tool, licence for every file);
@@ -295,6 +301,7 @@ The causes of a breach matter:
 | **Vega OS shell** (`apps/vega`): React Native for Vega reusing the pure-TS packages (ARCHITECTURE §5.2). Note that Vega blocks consumer sideloading 🟡[P11], so even private installs would go through Amazon's Appstore tooling ⚪ | The 4K Max is replaced by a Vega-based stick |
 | Public store release (GPL exception, product name, App Review demo mode, store listings) | A decision to publish, with Autodarts' agreement |
 | Apple TV (tvOS) build | Wanted; `react-native-tvos` makes it cheap |
+| Leaderboards ("The Sniper" for accuracy, "The Closer" for bull-finish speed) from the ShedDarts wishlist | After P4 career stats exist. All derivable from the event log |
 
 ---
 
