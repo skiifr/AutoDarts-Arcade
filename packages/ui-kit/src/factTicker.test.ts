@@ -52,6 +52,7 @@ describe('fact ticker', () => {
 
     const cleared = tickerReduce(s, fact('TakeoutFinished', { visitKey: V1 }));
     expect(cleared.darts).toEqual([]);
+    expect(cleared.previous.map((d) => d.segment.label)).toEqual(['T20', 'S5', 'MISS']);
     expect(cleared.visitKey).toBeNull();
     expect(cleared.inTakeout).toBe(false);
     expect(cleared.counts).toMatchObject({ facts: 6, darts: 3, takeouts: 1, inferred: 0 });
@@ -70,6 +71,7 @@ describe('fact ticker', () => {
   it('starts a new visit when a dart arrives with another visit key', () => {
     const s = run([dart(1, V1, 0, 'T20'), dart(2, V1, 1, 'S5'), dart(3, V2, 0, 'S1')]);
     expect(labels(s)).toEqual(['S1']);
+    expect(s.previous.map((d) => d.segment.label)).toEqual(['T20', 'S5']);
     expect(s.visitKey).toBe(V2);
   });
 
@@ -98,6 +100,7 @@ describe('fact ticker', () => {
       fact('BoardStatusChanged', { status: 'stuck-takeout', health: { fps: 12.5 } }),
     ]);
     expect(s.darts).toEqual([]);
+    expect(s.previous.map((d) => d.segment.label)).toEqual(['T20']);
     expect(s.boardStatus).toBe('stuck-takeout');
     expect(s.entries.map((e) => [e.tone, e.summary])).toEqual([
       ['status', 'status: Stuck takeout · 12.5 fps'],

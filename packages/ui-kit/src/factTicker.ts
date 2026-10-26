@@ -48,6 +48,8 @@ export interface TickerState {
   visitKey: string | null;
   /** Darts of the current visit, in board order. */
   darts: TickerDart[];
+  /** Darts of the last visit that ended (takeout, reset or a new visit), for a second look. */
+  previous: TickerDart[];
   /** Between `TakeoutStarted` and `TakeoutFinished`. */
   inTakeout: boolean;
   boardStatus: TickerBoardStatus | null;
@@ -61,6 +63,7 @@ export const TICKER_LIMIT = 30;
 export const EMPTY_TICKER: TickerState = {
   visitKey: null,
   darts: [],
+  previous: [],
   inTakeout: false,
   boardStatus: null,
   entries: [],
@@ -78,7 +81,14 @@ function withPoints(segment: Segment): string {
 
 /** Folds one board fact into the ticker. */
 export function tickerReduce(state: TickerState, fact: BoardFactDraft, limit = TICKER_LIMIT): TickerState {
-  let { visitKey, darts, inTakeout, boardStatus } = state;
+  let { visitKey, darts, previous, inTakeout, boardStatus } = state;
+  /** The current visit ends: keep its darts as the previous visit. */
+  const endVisit = (): void => {
+    if (darts.length > 0) previous = darts;
+    visitKey = null;
+    darts = [];
+    inTakeout = false;
+  };
   const counts = { ...state.counts, facts: state.counts.facts + 1 };
   let summary: string;
   let tone: TickerTone;
@@ -90,9 +100,8 @@ export function tickerReduce(state: TickerState, fact: BoardFactDraft, limit = T
       const p = fact.payload;
       recovered = p.recovered === true;
       if (p.visitKey !== visitKey) {
+        endVisit();
         visitKey = p.visitKey;
-        darts = [];
-        inTakeout = false;
       }
       const dart: TickerDart = { throwId: p.throwId, indexInVisit: p.indexInVisit, segment: p.segment, recovered, updated: false };
       darts = [...darts.filter((d) => d.throwId !== p.throwId && d.indexInVisit !== p.indexInVisit), dart].sort(
@@ -128,16 +137,12 @@ export function tickerReduce(state: TickerState, fact: BoardFactDraft, limit = T
       if (inferred) counts.inferred++;
       counts.takeouts++;
       summary = inferred ? 'board clear · inferred: the takeout may have happened while offline' : 'board clear';
-      visitKey = null;
-      darts = [];
-      inTakeout = false;
+      endVisit();
       tone = 'takeout';
       break;
     case 'VisitReset':
       summary = 'manual reset on the board';
-      visitKey = null;
-      darts = [];
-      inTakeout = false;
+      endVisit();
       tone = 'takeout';
       break;
     case 'BoardStatusChanged': {
@@ -161,7 +166,7 @@ export function tickerReduce(state: TickerState, fact: BoardFactDraft, limit = T
   }
 
   const entry: TickerEntry = { n: counts.facts, at: fact.occurredAt, type: fact.type, summary, tone, recovered, inferred };
-  return { visitKey, darts, inTakeout, boardStatus, counts, entries: [entry, ...state.entries].slice(0, Math.max(1, limit)) };
+  return { visitKey, darts, previous, inTakeout, boardStatus, counts, entries: [entry, ...state.entries].slice(0, Math.max(1, limit)) };
 }
 
 /** `2026-10-26T15:42:12.345Z` → `15:42:12.3` in local time. */
