@@ -304,6 +304,32 @@ describe('a failed log append of a board fact', () => {
     expect(inc.errors).toEqual([]);
   });
 
+  it('measures the rebuilt source’s outage from before the lost fact: a lost inferred takeout is inferred again (e2e seed 102597)', async () => {
+    // A whole visit comes and goes during an outage. The resync infers a takeout, but that fact
+    // is lost. The resync's own "online" came after it: measured from there, the rebuilt source
+    // saw a blip on an empty board, inferred nothing, and the visit was gone without a flag.
+    const { world, inc } = await playing('append-lost-inference');
+    let lose = 2;
+    world.store.failIf = (events) => lose > 0 && events.some((e) => e.type === 'TakeoutFinished' && e.payload.inferred === true) && lose-- > 0;
+    world.transport.setReachable(false);
+    await world.sched.advance(500);
+    for (const segment of ['S20', 'S19', 'S18']) {
+      world.board.throwDart({ segment });
+      await world.sched.advance(1500);
+    }
+    world.board.startTakeout();
+    await world.sched.advance(2500);
+    world.board.finishTakeout();
+    await world.sched.advance(1000);
+    world.transport.setReachable(true);
+    await world.sched.advance(3000);
+    await inc.runtime.whenIdle();
+    const s = inc.runtime.getSnapshot()!;
+    expect(inc.problems.map((p) => [p.fact?.type, p.recovery])).toEqual([['TakeoutFinished', 'resync']]);
+    expect(s.phase).toBe('awaiting-review');
+    expect(s.turns[0]!.needsReview).toBe(true);
+  });
+
   it('reports every problem with console.error unless the app passes onError', async () => {
     const world = makeWorld('console');
     const listeners = new Set<FactListener>();

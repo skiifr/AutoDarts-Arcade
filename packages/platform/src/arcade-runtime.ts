@@ -34,7 +34,11 @@ import { systemScheduler } from './runtime';
 
 export * from './contact-store';
 
-/** Something the runtime could not do, reported to `onError`. */
+/**
+ * Something the runtime could not do, reported to `onError`: a board fact the host refused
+ * (`result`), a board fact it could not persist (`error` and `recovery`), or a failed
+ * `ContactStore` read or write (`error` alone).
+ */
 export interface RuntimeProblem {
   fact?: BoardFactDraft;
   command?: ArcadeCommand;
@@ -132,8 +136,11 @@ export class ArcadeRuntime {
   /** Rebuilds of the source since an append last worked (for the recovery pauses). */
   private failedRecoveries = 0;
   private recoveryTimer: TimerHandle | null = null;
-  /** A recovery is due the next time the source starts (the runtime was stopped meanwhile). */
-  private restoreOnStart = false;
+  /**
+   * A recovery is due the next time the source starts (the runtime was stopped meanwhile), with
+   * the contact from before the lost fact.
+   */
+  private restoreOnStart: { contactMs: number | null } | null = null;
   /** The latest SourceConnectionChanged said online. */
   private sourceOnline = false;
   /**
@@ -141,6 +148,11 @@ export class ArcadeRuntime {
    * was online. The board was in sight then.
    */
   private contactMs: number | null = null;
+  /**
+   * Facts received and not yet through the host. A contact is only as good as the log: while
+   * one is pending, the board's state at a heartbeat may hold what the log will never get.
+   */
+  private unsettled = 0;
   private contactTimer: TimerHandle | null = null;
   private contactArmed: { mono: number; wall: number | undefined } = { mono: 0, wall: undefined };
 
@@ -165,8 +177,9 @@ export class ArcadeRuntime {
     this.running = true;
     this.unsubscribeSource = this.source.subscribe((fact) => this.receive(fact));
     if (this.restoreOnStart) {
-      this.restoreOnStart = false;
-      this.restoreSource(this.restoredState(this.current));
+      const { contactMs } = this.restoreOnStart;
+      this.restoreOnStart = null;
+      this.restoreSource(this.restoredState(this.current, { contactMs }));
     }
     this.source.start();
   }
@@ -210,8 +223,8 @@ export class ArcadeRuntime {
       try {
         const host = await SessionHost.resume(this.hostDeps(), sessionId);
         if (restorable) {
-          this.restoreOnStart = false;
-          this.restoreSource(this.restoredState(host, await this.storedContact(sessionId)));
+          this.restoreOnStart = null;
+          this.restoreSource(this.restoredState(host, { stored: await this.storedContact(sessionId) }));
         }
         // A contact made while another session was open says nothing about this one's board.
         if (this.current.getSnapshot()?.sessionId !== sessionId) this.contactMs = null;
@@ -269,13 +282,23 @@ export class ArcadeRuntime {
   // ── board facts ────────────────────────────────────────────────────────────
 
   private receive(fact: BoardFactDraft): void {
+    // The contact before this fact: if the log loses the fact, what the source knew from here on
+    // is lost with it, and a rebuilt source must measure its outage from no later than this.
+    const before = this.contactMs;
     if (fact.type === 'SourceConnectionChanged') this.setOnline(fact.payload.state === 'online');
     if (this.sourceOnline) this.noteContact(epochMsFromIso(fact.occurredAt));
     const gen = this.sourceGen;
-    void this.enqueue(() => this.apply(fact, gen));
+    this.unsettled++;
+    void this.enqueue(async () => {
+      try {
+        await this.apply(fact, gen, before);
+      } finally {
+        this.unsettled--;
+      }
+    });
   }
 
-  private async apply(fact: BoardFactDraft, gen: number): Promise<void> {
+  private async apply(fact: BoardFactDraft, gen: number, contactBefore: number | null): Promise<void> {
     // Sent before the source was rebuilt: it reads the board again, this is stale.
     if (gen !== this.sourceGen) return;
     let result: HostResult;
@@ -288,7 +311,7 @@ export class ArcadeRuntime {
         result = await this.current.ingest(fact);
       } catch (error) {
         // ...then rebuild the source from the log, so it reads the board again (R28).
-        this.report({ fact, error, recovery: this.recoverSource() });
+        this.report({ fact, error, recovery: this.recoverSource(contactBefore) });
         return;
       }
       this.report({ fact, error: first, recovery: 'retried' });
@@ -301,14 +324,17 @@ export class ArcadeRuntime {
    * The log lost a board fact. The source's visit state is ahead of the log (a dart no turn
    * holds, a takeout that ended no turn), so it is rebuilt from the log and the source re-reads
    * the board: what the log lost comes back as recovered, or as an inferred takeout, and is
-   * flagged (§6.4). Facts the source sent after the lost one are dropped with it. While the
-   * storage keeps failing the source waits, longer each time (`RECOVERY_BACKOFF_MS`).
+   * flagged (§6.4). Facts the source sent after the lost one are dropped with it, and so is the
+   * contact they brought: the outage is measured from `contactBefore`, the last contact before
+   * the lost fact (a lost inferred takeout is then inferred again). While the storage keeps
+   * failing the source waits, longer each time (`RECOVERY_BACKOFF_MS`).
    */
-  private recoverSource(): RuntimeProblem['recovery'] {
+  private recoverSource(contactBefore: number | null): RuntimeProblem['recovery'] {
     if (this.source.restore === undefined) return 'none';
     this.sourceGen++;
+    this.contactMs = contactBefore;
     if (!this.running) {
-      this.restoreOnStart = true;
+      this.restoreOnStart = { contactMs: contactBefore };
       return 'resync';
     }
     this.stopSource();
@@ -327,7 +353,7 @@ export class ArcadeRuntime {
 
   private restartSource(): void {
     if (!this.running) return;
-    this.restoreSource(this.restoredState(this.current));
+    this.restoreSource(this.restoredState(this.current, { contactMs: this.contactMs }));
     this.source.start();
   }
 
@@ -345,19 +371,20 @@ export class ArcadeRuntime {
 
   /**
    * The source's visit state from `host`'s log, with the last time the board was in sight: the
-   * log's own (`observedAt`, from the latest reading it holds) or the runtime's contact (this
-   * run's while it played this session, or `stored` from before a crash), whichever is later. A
-   * contact counts only up to LINK_LOSS_MS before it, as for any connection that ends (§6.4):
-   * frames the board sent just before may never have arrived. The adapter's `restore()` takes it
-   * as `observedAt`.
+   * log's own (`observedAt`, from the latest reading it holds) or the runtime's contact, whichever
+   * is later. The contact is this run's (`contactMs`, only while it plays this very session) or
+   * `stored` from before a crash. A contact counts only up to LINK_LOSS_MS before it, as for any
+   * connection that ends (§6.4): frames the board sent just before may never have arrived. The
+   * adapter's `restore()` takes it as `observedAt`.
    */
-  private restoredState(host: SessionHost, stored?: string): RestoredVisitState {
+  private restoredState(host: SessionHost, known: { contactMs?: number | null; stored?: string | undefined }): RestoredVisitState {
     const state = rebuildVisitState(host.getLog().filter((e) => isBoardFact(e)), this.o.ids);
     const fromLog = state.observedAt === undefined ? undefined : epochMsFromIso(state.observedAt);
-    const storedMs = stored === undefined ? undefined : epochMsFromIso(stored);
+    const storedMs = known.stored === undefined ? undefined : epochMsFromIso(known.stored);
     const playing = this.current.getSnapshot()?.sessionId;
     const sameSession = playing !== undefined && host.getSnapshot()?.sessionId === playing;
-    const live = sameSession && this.contactMs !== null ? this.contactMs : undefined;
+    const liveMs = known.contactMs === undefined ? this.contactMs : known.contactMs;
+    const live = sameSession && liveMs !== null ? liveMs : undefined;
     const contacts = [live, storedMs].filter((ms): ms is number => ms !== undefined);
     const contact = contacts.length === 0 ? undefined : Math.max(...contacts) - LINK_LOSS_MS;
     if (contact !== undefined && (fromLog === undefined || contact > fromLog)) state.observedAt = isoFromEpochMs(contact);
@@ -399,7 +426,9 @@ export class ArcadeRuntime {
       this.scheduler.now() - this.contactArmed.mono <= limit &&
       (wall === undefined || this.contactArmed.wall === undefined || wall - this.contactArmed.wall <= limit);
     const snapshot = this.current.getSnapshot();
-    if (onTime && wall !== undefined) {
+    // With a fact still on its way to the log, the board's state now may be more than the log
+    // will ever hold: no contact until it is through.
+    if (onTime && wall !== undefined && this.unsettled === 0) {
       this.noteContact(wall);
       if (snapshot !== null && snapshot.closed === null) {
         this.o.contactStore!.set(snapshot.sessionId, isoFromEpochMs(wall)).catch((error: unknown) => this.report({ error }));
@@ -471,9 +500,12 @@ export class ArcadeRuntime {
 
 /** The default `onError`: board facts have no caller to tell, so the problem goes to the console. */
 function logProblem(p: RuntimeProblem): void {
-  const what = p.fact?.type ?? p.command?.type ?? 'input';
-  const why = p.result?.status === 'rejected' ? `refused (${p.result.reason}): ${p.result.message}` : `could not be stored (recovery: ${p.recovery ?? 'none'})`;
-  console.error(`[arcade-runtime] ${what} ${why}`, p.error ?? '');
+  const what = p.fact?.type ?? p.command?.type;
+  let message: string;
+  if (what === undefined) message = 'the contact store failed';
+  else if (p.result?.status === 'rejected') message = `${what} refused (${p.result.reason}): ${p.result.message}`;
+  else message = `${what} could not be stored (recovery: ${p.recovery ?? 'none'})`;
+  console.error(`[arcade-runtime] ${message}`, p.error ?? '');
 }
 
 /** One listener's error must not keep the others from hearing about the change. */
