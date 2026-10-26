@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { d, manualReset, show, snap, takeoutFinished, takeoutStarted, throwing, tracker } from '../testing/snapshots';
-import type { Snapshot } from './snapshot';
-import { MIN_UNSEEN_VISIT_MS, type ApplyMode, type VisitTracker } from './visit-tracker';
+import { rebuildVisitState } from './rebuild';
+import { SAME_DART_TOLERANCE, type Snapshot } from './snapshot';
+import { MIN_UNSEEN_VISIT_MS, type ApplyMode, type TrackerFact, type VisitTracker } from './visit-tracker';
 
 const A = d('T20', 0.0303, 0.6166);
 const B = d('T20', 0.0002, 0.6127);
@@ -194,7 +195,7 @@ describe('§6.2 snapshot diff (live)', () => {
     const s = snap('Throw', 'Throw detected');
     s.throws.push({ segment: { number: 0, multiplier: 0, bed: 'miss', label: 'MISS' }, fatal: { note: 'x', rawExcerpt: '{}' }, notes: [] });
     const [fact] = t.apply(s, 'live');
-    expect(show([fact!])).toEqual(['detect 0:MISS anomaly']);
+    expect(show([fact!])).toEqual(['detect 0:MISS review anomaly']);
     expect(fact?.type === 'DartDetected' && fact.payload.pendingReview).toBe(true);
     // A readable dart carries no flag.
     const [next] = t.apply(throwing(A, A), 'live').filter((f) => f.type === 'DartDetected');
@@ -207,7 +208,7 @@ describe('§6.2 snapshot diff (live)', () => {
     const s = snap('Throw', 'Throw detected');
     s.throws.push({ segment: { number: 0, multiplier: 0, bed: 'miss', label: 'MISS' }, coords: C.coords, fatal: { note: 'x', rawExcerpt: '{}' }, notes: [] });
     const [fact] = t.apply(s, 'live');
-    expect(show([fact!])).toEqual(['update T5->MISS']);
+    expect(show([fact!])).toEqual(['update T5->MISS review']);
     expect(fact?.type === 'DartUpdated' && fact.payload.pendingReview).toBe(true);
   });
 });
@@ -281,13 +282,6 @@ describe('§6.4 resync and decision R', () => {
     const t = withKnown(A);
     expect(step(t, takeoutStarted(), 'resync')).toEqual(['takeout-end inferred', 'takeout-start']);
   });
-
-  it('the last visit reappears (its takeout was called off): adopted, not counted again', () => {
-    const t = online();
-    step(t, takeoutStarted(A, B));
-    step(t, takeoutFinished());
-    expect(step(t, throwing(A, B, C), 'resync')).toEqual(['anomaly', 'detect 2:T5 recovered']);
-  });
 });
 
 describe('Wi-Fi blips: a takeout is inferred only when the board was away long enough for one', () => {
@@ -341,14 +335,72 @@ describe('Wi-Fi blips: a takeout is inferred only when the board was away long e
     expect(step(still, takeoutStarted(), 'resync', 1000)).toEqual([]);
     expect(still.state().inTakeout).toBe(true);
   });
+});
 
-  it('the last visit reappearing is adopted whatever the outage', () => {
-    for (const away of [10, 60_000]) {
-      const t = online();
-      step(t, takeoutStarted(A, B));
-      step(t, takeoutFinished());
-      expect(step(t, throwing(A, B, C), 'resync', away)).toEqual(['anomaly', 'detect 2:T5 recovered']);
-    }
+describe("darts where the last visit's darts were: counted, flagged, never dropped (decision R)", () => {
+  // Chaos seed 7489: two different S4 darts in consecutive visits, 0.0020 apart (≈ 0.34 mm).
+  const P = d('S4', 0.7111183707578469, 0.4444793126583797);
+  const Q = d('S4', 0.7117440837186804, 0.44260195786078516);
+  const T3 = d('T3', -0.0826, -0.5946);
+  const A20 = d('S20', 0.031, 0.63); // A re-read across the wire
+  const nearA = d('T20', 0.0303 + SAME_DART_TOLERANCE * 0.9, 0.6166);
+  const pastA = d('T20', 0.0303 + SAME_DART_TOLERANCE * 1.1, 0.6166);
+  const S = MIN_UNSEEN_VISIT_MS;
+
+  /** An online tracker whose last visit, `prev`, was seen taken out. */
+  function after(...prev: Parameters<typeof throwing>): VisitTracker {
+    const t = online();
+    step(t, throwing(...prev));
+    step(t, takeoutStarted(...prev));
+    step(t, takeoutFinished());
+    return t;
+  }
+
+  it.each([
+    // [situation, previous visit, snapshot, mode, away ms, facts]
+    ['a new dart 0.34 mm from the last first dart (seed 7489)', [P, T3], throwing(Q), 'live', undefined, ['anomaly', 'detect 0:S4 review']],
+    ['within the tolerance', [A, B], throwing(nearA), 'live', undefined, ['anomaly', 'detect 0:T20 review']],
+    ['just past the tolerance: a plain new dart', [A, B], throwing(pastA), 'live', undefined, ['detect 0:T20']],
+    ['the same place, another segment: a plain new dart', [A, B], throwing(A20), 'live', undefined, ['detect 0:S20']],
+    ['the whole last visit back', [A, B], throwing(A, B), 'live', undefined, ['anomaly', 'detect 0:T20 review', 'detect 1:T20 review']],
+    ['the last visit back and a new dart: only the matches flagged', [A, B], throwing(A, B, C), 'live', undefined, ['anomaly', 'detect 0:T20 review', 'detect 1:T20 review', 'detect 2:T5']],
+    ['only a later dart matches: not the last visit', [A, B], throwing(E, B), 'live', undefined, ['detect 0:S12', 'detect 1:T20']],
+    ['no coordinates: never taken for the last visit', [d('T20'), d('S5')], throwing(d('T20')), 'live', undefined, ['detect 0:T20']],
+    ['resync after a blip', [A, B], throwing(A, B, C), 'resync', S - 1, ['anomaly', 'detect 0:T20 recovered review', 'detect 1:T20 recovered review', 'detect 2:T5 recovered']],
+    ['resync after a long outage: the matches prove nothing, a takeout is inferred', [A, B], throwing(A, B, C), 'resync', 60_000, ['takeout-end inferred', 'anomaly', 'detect 0:T20 recovered review', 'detect 1:T20 recovered review', 'detect 2:T5 recovered']],
+    ['resync after an outage of unknown length', [P, T3], throwing(Q), 'resync', undefined, ['takeout-end inferred', 'anomaly', 'detect 0:S4 recovered review']],
+  ] as const)('%s', (_label, prev, snapshot, mode, away, facts) => {
+    const t = after(...prev);
+    expect(step(t, snapshot, mode, away)).toEqual(facts);
+  });
+
+  it('the anomaly names the darts it matched', () => {
+    const t = after(P, T3);
+    const [anomaly] = t.apply(throwing(Q), 'live');
+    expect(anomaly?.type === 'SourceAnomaly' && anomaly.payload).toEqual({
+      note: expect.stringMatching(/1 dart\(s\) where the previous visit's darts were: counted pending review/),
+      rawExcerpt: 'S4',
+    });
+  });
+
+  it('a suspected ghost stays pending review when the board re-reads it; an ordinary dart does not', () => {
+    const t = after(A, B);
+    step(t, throwing(A, B));
+    expect(step(t, throwing(A20, B))).toEqual(['update T20->S20 review']);
+    const u = online();
+    step(u, throwing(A, B));
+    expect(step(u, throwing(A20, B))).toEqual(['update T20->S20']);
+  });
+
+  it('the suspicion survives a crash: rebuildVisitState restores it from the log', () => {
+    const t = online();
+    const facts: TrackerFact[] = [];
+    for (const s of [throwing(A, B), takeoutStarted(A, B), takeoutFinished(), throwing(A, B, C)]) facts.push(...t.apply(s, 'live'));
+    const restored = rebuildVisitState(facts, () => '01JBX00000000000000000000V');
+    expect(restored.known.map((k) => k.suspectedGhost ?? false)).toEqual([true, true, false]);
+    expect(restored.known).toEqual(t.state().known);
+    const resumed = tracker(restored);
+    expect(step(resumed, throwing(A20, B, C))).toEqual(['update T20->S20 review']);
   });
 });
 

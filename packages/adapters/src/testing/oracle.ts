@@ -11,8 +11,8 @@ import type { BoardModel } from '../simulator/board-model';
  * model draws at random, so every reading is unique. A board visit is *clean* when the
  * adapter holds exactly its darts, with their final segments, in one unflagged adapter
  * visit that ended the same way. It is *flagged* when an adapter visit holding any of its
- * darts has a recovered dart or ended with an inferred takeout, or when an inferred
- * takeout was emitted across it. Every visit must be clean or flagged.
+ * darts has a recovered dart or a dart pending review, or ended with an inferred takeout,
+ * or when an inferred takeout was emitted across it. Every visit must be clean or flagged.
  */
 
 export interface AppliedRecord {
@@ -90,7 +90,7 @@ export class ChaosRecorder {
     const board = this.board;
     const darts = new Map<string, AdapterDart>();
     const visits = new Map<string, AdapterVisit>();
-    const emissions = new Map<number, { recovered: boolean }[]>();
+    const emissions = new Map<number, { flagged: boolean }[]>();
     const visitOf = (k: string): AdapterVisit => {
       let a = visits.get(k);
       if (!a) {
@@ -112,13 +112,13 @@ export class ChaosRecorder {
           darts.set(p.throwId, { throwId: p.throwId, visitKey: p.visitKey, recovered: !!p.recovered, live: true, segment: p.segment, detId });
           const a = visitOf(p.visitKey);
           a.darts.push(p.throwId);
-          if (p.recovered) {
-            a.flagged = true;
-            recoveredDarts++;
-          }
+          if (p.recovered) recoveredDarts++;
+          // Recovered and pending-review darts both flag their turn in the host.
+          const flagged = !!p.recovered || !!p.pendingReview;
+          if (flagged) a.flagged = true;
           if (detId !== undefined) {
             const list = emissions.get(detId) ?? [];
-            list.push({ recovered: !!p.recovered });
+            list.push({ flagged });
             emissions.set(detId, list);
           }
           break;
@@ -130,6 +130,7 @@ export class ChaosRecorder {
             break;
           }
           d.segment = f.payload.segment;
+          if (f.payload.pendingReview) visitOf(d.visitKey).flagged = true;
           if (f.payload.coords) {
             const detId = this.detOf(f.payload.coords);
             if (detId === undefined) v.push(`update to invented coordinates ${key(f.payload.coords)}`);
@@ -162,7 +163,7 @@ export class ChaosRecorder {
 
     // A physical detection is never emitted twice unless the later emission is flagged.
     for (const [detId, list] of emissions) {
-      if (list.slice(1).some((e) => !e.recovered)) v.push(`detection ${detId} emitted ${list.length}× without a recovered flag`);
+      if (list.slice(1).some((e) => !e.flagged)) v.push(`detection ${detId} emitted ${list.length}× without a recovered or pending-review flag`);
     }
     const live = [...darts.values()].filter((d) => d.live);
     const liveByDet = new Map<number, AdapterDart[]>();

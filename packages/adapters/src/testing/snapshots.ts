@@ -44,14 +44,14 @@ export function tracker(restored?: VisitState): VisitTracker {
   return new VisitTracker(createUlidSource({ now: () => 1_793_649_600_000, random: seededRandom('tracker') }), restored);
 }
 
-/** Compact view of tracker facts. */
+/** Compact view of tracker facts (`review`: `pendingReview`). */
 export function show(facts: readonly TrackerFact[]): string[] {
   return facts.map((f) => {
     switch (f.type) {
       case 'DartDetected':
-        return `detect ${f.payload.indexInVisit}:${f.payload.segment.label}${f.payload.recovered ? ' recovered' : ''}${f.anomaly ? ' anomaly' : ''}`;
+        return `detect ${f.payload.indexInVisit}:${f.payload.segment.label}${f.payload.recovered ? ' recovered' : ''}${f.payload.pendingReview ? ' review' : ''}${f.anomaly ? ' anomaly' : ''}`;
       case 'DartUpdated':
-        return `update ${f.payload.previous.label}->${f.payload.segment.label}`;
+        return `update ${f.payload.previous.label}->${f.payload.segment.label}${f.payload.pendingReview ? ' review' : ''}`;
       case 'DartWithdrawn':
         return 'withdraw';
       case 'TakeoutStarted':

@@ -1,5 +1,6 @@
 import type { BoardFact } from '@arcade/event-schema';
 import type { IdSource } from '../ports';
+import { relate } from './snapshot';
 import type { KnownDart, VisitState } from './visit-tracker';
 
 type FactLike = (Pick<BoardFact, 'type' | 'payload'> | { type: string; payload: unknown }) & { occurredAt?: string };
@@ -67,6 +68,9 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
         }
         const dart: KnownDart = { throwId: p.throwId, segment: p.segment, indexInVisit: p.indexInVisit };
         if (p.coords) dart.coords = p.coords;
+        // Flagged where the last visit's dart was: the tracker's suspected ghost, which stays flagged.
+        const prev = recent[0]?.[p.indexInVisit];
+        if (p.pendingReview && dart.coords && prev?.coords && relate(prev, dart) === 'same') dart.suspectedGhost = true;
         known[p.indexInVisit] = dart;
         break;
       }
