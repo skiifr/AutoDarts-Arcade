@@ -23,7 +23,7 @@ import { MemoryLogStore, gameRegistry, ulidFromNumber, type GameRegistry, type H
 import type { ArcadeEvent, BoardFactDraft, PlayerRef } from '@arcade/event-schema';
 import { GAMES } from '@arcade/games';
 import { createArcadeRuntime, type ArcadeRuntime, type RuntimeProblem } from '../arcade-runtime';
-import type { ContactStore } from '../contact-store';
+import { MemoryContactStore, type ContactStore } from '../contact-store';
 
 export const EPOCH = SIM_EPOCH_MS;
 export const REGISTRY: GameRegistry = gameRegistry(GAMES);
@@ -82,6 +82,8 @@ export interface World {
   transport: FakeBoardTransport;
   /** The device's log storage: survives a crash, and can be made to refuse appends. */
   store: FlakyLogStore;
+  /** The device's key-value storage for the last board contact (survives a crash too). */
+  contacts: MemoryContactStore;
   clock: () => string;
   /** Simulated ms of an ISO time from `clock`. */
   simMs(iso: string): number;
@@ -97,6 +99,7 @@ export function makeWorld(seed: string, options: { faults?: FaultPlan; board?: P
     board,
     transport,
     store: new FlakyLogStore(new MemoryLogStore(), seededRandom(`store:${seed}`)),
+    contacts: new MemoryContactStore(),
     clock: () => isoFromEpochMs(EPOCH + sched.now()),
     simMs: (iso) => (epochMsFromIso(iso) ?? NaN) - EPOCH,
   };
@@ -178,11 +181,14 @@ export function makePlayers(n: number): PlayerRef[] {
 /**
  * The person at the board: whenever the game pauses for review, they look at the turn for a
  * moment and confirm it as it is (no corrections, so the comparison sees the raw outcome). They
- * survive an app crash: `watch` the new runtime after a resume.
+ * survive an app crash: `detach` when it dies, `watch` the new runtime after the resume. A
+ * confirm the app could not store is pressed again a moment later.
  */
 export class Referee {
   confirms = 0;
   readonly results: HostResult[] = [];
+  /** Virtual times of the confirms pressed: the people at the board looked at the app then. */
+  readonly confirmTimes: number[] = [];
   private runtime: ArcadeRuntime | null = null;
   private unsubscribe: (() => void) | null = null;
   private pending: number | null = null;
@@ -196,10 +202,20 @@ export class Referee {
   }
 
   watch(runtime: ArcadeRuntime): void {
-    this.unsubscribe?.();
+    this.detach();
     this.runtime = runtime;
     this.unsubscribe = runtime.subscribe(() => this.check());
     this.check();
+  }
+
+  /** The app died: forget what was about to be pressed. */
+  detach(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    this.runtime = null;
+    this.pending = null;
+    if (this.timer !== null) this.sched.clearTimeout(this.timer);
+    this.timer = null;
   }
 
   get busy(): boolean {
@@ -212,19 +228,31 @@ export class Referee {
     const turn = s.awaitingReviewTurn;
     if (this.pending === turn) return;
     this.pending = turn;
+    this.press(turn, 500 + this.random() * 3500);
+  }
+
+  private press(turn: number, afterMs: number): void {
+    const runtime = this.runtime!;
     this.timer = this.sched.setTimeout(() => {
       this.timer = null;
-      void this.runtime!.command('ConfirmTurn', { turnIndex: turn }).then((r) => {
-        this.results.push(r);
-        this.confirms++;
-        this.pending = null;
-        this.check();
-      });
-    }, 500 + this.random() * 3500);
+      this.confirmTimes.push(this.sched.now());
+      runtime.command('ConfirmTurn', { turnIndex: turn }).then(
+        (r) => {
+          if (runtime !== this.runtime) return;
+          this.results.push(r);
+          this.confirms++;
+          this.pending = null;
+          this.check();
+        },
+        () => {
+          // The storage refused it: press again.
+          if (runtime === this.runtime) this.press(turn, 1000);
+        },
+      );
+    }, afterMs);
   }
 
   stop(): void {
-    this.unsubscribe?.();
-    if (this.timer !== null) this.sched.clearTimeout(this.timer);
+    this.detach();
   }
 }
