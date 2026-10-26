@@ -58,16 +58,24 @@ export class BoardHealthSampler {
   private readonly scheduler: Scheduler;
   private readonly clock: Clock;
   private readonly intervalMs: number;
-  private readonly listeners = new Listeners<BoardHealthSample>();
+  private readonly listeners: Listeners<BoardHealthSample>;
   private timer: TimerHandle | null = null;
   private running = false;
   private inFlight = false;
 
-  constructor(options: { transport: Transport; scheduler: Scheduler; clock: Clock; intervalMs?: number }) {
+  constructor(options: {
+    transport: Transport;
+    scheduler: Scheduler;
+    clock: Clock;
+    intervalMs?: number;
+    /** Where an error thrown by a sample listener goes (default: reported as uncaught, later). */
+    onListenerError?: (err: unknown) => void;
+  }) {
     this.transport = options.transport;
     this.scheduler = options.scheduler;
     this.clock = options.clock;
     this.intervalMs = options.intervalMs ?? HEALTH_INTERVAL_MS;
+    this.listeners = new Listeners<BoardHealthSample>(options.onListenerError);
   }
 
   onSample(listener: (sample: BoardHealthSample) => void): () => void {

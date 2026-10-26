@@ -6,7 +6,8 @@ import { createBoardTransport } from './transport';
 /**
  * Wiring for the app: the board adapter and the health sampler over the real transport,
  * timers, clock and ids. The session host subscribes to `source` and starts the sampler
- * with each game.
+ * with each game. `onListenerError` covers the listeners of both; the app should log there,
+ * since the default reports the error as uncaught, which can be fatal in a release build.
  */
 export interface BoardConnection {
   transport: Transport;
@@ -29,6 +30,11 @@ export function connectBoard(
     ids: options.ids ?? systemIds,
     random: options.random ?? systemRandom,
   });
-  const health = new BoardHealthSampler({ transport, scheduler, clock });
+  const health = new BoardHealthSampler({
+    transport,
+    scheduler,
+    clock,
+    ...(options.onListenerError ? { onListenerError: options.onListenerError } : {}),
+  });
   return { transport, source, health };
 }

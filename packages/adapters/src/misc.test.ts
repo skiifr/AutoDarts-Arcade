@@ -51,6 +51,24 @@ describe('board-health sampler (§9.7)', () => {
     expect(s.fps).toBeUndefined();
   });
 
+  it('a throwing sample listener goes to onListenerError; the others still hear the sample', async () => {
+    const sched = new VirtualScheduler();
+    const transport = new FakeBoardTransport({ board: new BoardModel({ random: seededRandom(1) }), scheduler: sched, random: seededRandom(2) });
+    const errors: unknown[] = [];
+    const sampler = new BoardHealthSampler({ transport, scheduler: sched, clock: () => 't', onListenerError: (e) => errors.push(e) });
+    const boom = new Error('listener');
+    const heard: unknown[] = [];
+    sampler.onSample(() => {
+      throw boom;
+    });
+    sampler.onSample((s) => heard.push(s));
+    const p = sampler.sample();
+    await sched.advance(100);
+    await p;
+    expect(errors).toEqual([boom]);
+    expect(heard).toHaveLength(1);
+  });
+
   it('turns a sample into a loggable BoardStatusChanged with health', () => {
     const f = healthFact({ at: '2026-11-02T20:00:00.000Z', fps: 12, camFps: [30, 29] }, 'ready', { kind: 'autodarts-local', adapterVersion: 'x' });
     expect(f).toMatchObject({ type: 'BoardStatusChanged', payload: { status: 'ready', health: { fps: 12, camFps: [30, 29] } } });
