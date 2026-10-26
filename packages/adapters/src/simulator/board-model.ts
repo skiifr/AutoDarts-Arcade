@@ -27,6 +27,8 @@ export interface Detection {
   phantom: boolean;
   /** The board retracted it while it was still in the visit. */
   withdrawn: boolean;
+  /** Pulled out during a takeout before the takeout finished (it still counts for its visit). */
+  pulled?: boolean;
   physicalId?: number;
   /** Every reading the board reported for it, oldest first (ground truth for the chaos suite). */
   history: { segment: Segment; coords: Coords }[];
@@ -117,6 +119,8 @@ export class BoardModel {
   private readonly frames = new Listeners<string>();
 
   private list: Detection[] = [];
+  /** The darts listed when the current takeout began (null outside a takeout). */
+  private takeoutList: Detection[] | null = null;
   private status = 'Throw';
   private event = 'Started';
   private running = true;
@@ -283,8 +287,23 @@ export class BoardModel {
     if (this.status === 'Takeout in progress' || !this.running) return;
     this.status = 'Takeout in progress';
     this.event = 'Takeout started';
+    this.takeoutList = [...this.list];
     this.changed();
     this.motion(true);
+  }
+
+  /**
+   * During a takeout, one dart comes out (default: the first listed), as on a real board where
+   * darts are pulled one at a time. The board lists the rest; the takeout goes on. Pulling the
+   * last dart leaves an empty board still in takeout until `finishTakeout()`.
+   */
+  pullDart(index = 0): Detection | null {
+    if (this.status !== 'Takeout in progress' || this.stuck) return null;
+    const [det] = this.list.splice(index, 1);
+    if (!det) return null;
+    det.pulled = true;
+    this.changed();
+    return det;
   }
 
   /** All darts are off the board. */
@@ -374,7 +393,10 @@ export class BoardModel {
 
   private closeVisit(by: 'takeout' | 'reset'): void {
     const v = this.currentVisit;
-    v.finalDetections = this.list.map((d) => d.id);
+    // Darts pulled during the takeout were still in the visit: its darts are those listed when
+    // the takeout began.
+    v.finalDetections = (by === 'takeout' && this.takeoutList ? this.takeoutList : this.list).map((d) => d.id);
+    this.takeoutList = null;
     v.endedAt = this.now();
     v.endedBy = by;
     this.list = [];

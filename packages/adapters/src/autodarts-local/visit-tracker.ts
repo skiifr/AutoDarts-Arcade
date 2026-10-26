@@ -42,6 +42,12 @@ export interface KnownDart {
    * identity is in doubt, not its reading, so every later fact about it stays `pendingReview`.
    */
   suspectedGhost?: true;
+  /**
+   * The tracker could not be sure of this dart: it was gone when a takeout was first seen
+   * (pulled, or withdrawn by the board before the takeout began). It was flagged with a
+   * `DartUpdated{pendingReview}`, and every later fact about it stays `pendingReview`.
+   */
+  inDoubt?: true;
 }
 
 export interface VisitState {
@@ -87,6 +93,12 @@ export class VisitTracker {
   private lastEvent: string | undefined;
   /** The current takeout was first seen with the darts already gone: its final list is unverified. */
   private blindTakeout = false;
+  /**
+   * The last dart came out and ended the visit, but the board still shows its takeout on the
+   * empty board (darts pulled one at a time, before "Takeout finished"). That is the end of the
+   * same takeout, not a new, empty one.
+   */
+  private takeoutTail = false;
 
   constructor(ids: IdSource, restored?: VisitState) {
     this.ids = ids;
@@ -143,8 +155,10 @@ export class VisitTracker {
    */
   apply(snap: Snapshot, mode: ApplyMode, awayMs?: number): TrackerFact[] {
     const out: TrackerFact[] = [];
+    if (snap.throws.length > 0) this.takeoutTail = false;
     if (mode === 'resync' || !this.observed) this.applyResync(snap, out, awayMs);
     else this.applyLive(snap, out);
+    if (!takeoutBegins(snap)) this.takeoutTail = false; // the board has left that takeout
     this.observed = true;
     this.lastEvent = snap.event;
     if (out.length > 0) this.changes++;
@@ -166,7 +180,9 @@ export class VisitTracker {
         if (this.s.inTakeout && !takeoutBegins(snap)) this.finishTakeout(out, false);
         else if (this.missedTakeout(snap)) this.finishTakeout(out, true);
       } else if (this.s.inTakeout) {
+        // The last dart is out: the visit is over, even if the board still shows the takeout.
         this.finishTakeout(out, this.blindTakeout);
+        if (takeoutBegins(snap)) this.takeoutTail = true;
       } else if (snap.event === 'Takeout finished') {
         // A takeout we never saw start: darts thrown before it may be missing too.
         this.finishTakeout(out, true);
@@ -190,6 +206,9 @@ export class VisitTracker {
       }
     } else if (this.s.inTakeout) {
       this.diffDuringTakeout(snap, out, false);
+    } else if (takeoutBegins(snap)) {
+      // Status first: darts missing from a takeout are being removed, not withdrawn.
+      this.takeoutSeen(snap, out, false);
     } else if (this.anchoredLive(T)) {
       this.diffSameVisit(out, T, false);
     } else {
@@ -206,6 +225,7 @@ export class VisitTracker {
   private missedTakeout(snap: Snapshot): boolean {
     return (
       !this.s.inTakeout &&
+      !this.takeoutTail &&
       snap.event === 'Takeout finished' &&
       this.lastEvent !== undefined &&
       this.lastEvent !== 'Takeout finished'
@@ -258,6 +278,9 @@ export class VisitTracker {
       if (wholeVisitFits) this.finishTakeout(out, true);
       else this.endEmptyTakeout(snap);
       this.detectFrom(out, T, 0, true, this.flagGhosts(out, T, ghosts));
+    } else if (!this.s.inTakeout && takeoutBegins(snap)) {
+      // Status first: darts missing from a takeout are being removed, not withdrawn.
+      this.takeoutSeen(snap, out, true);
     } else if (!this.anchoredResync(T)) {
       this.finishTakeout(out, true);
       this.detectFrom(out, T, 0, true);
@@ -315,6 +338,59 @@ export class VisitTracker {
   }
 
   /**
+   * A takeout seen for the first time with darts still listed (we missed its start: an outage,
+   * or a lost frame). Darts come off during a takeout, so a known dart missing from the list was
+   * pulled out, or was withdrawn by the board before the takeout began: nothing tells the two
+   * apart. It is kept, not withdrawn, and flagged pending review (decision R). Darts the list has
+   * and we do not are darts we missed before the takeout. A list that is not this visit's
+   * darts means a visit ended while we were not looking: an inferred takeout.
+   */
+  private takeoutSeen(snap: Snapshot, out: TrackerFact[], recovered: boolean): void {
+    const K = this.s.known;
+    const T = snap.throws;
+    const kept = this.subsequence(T);
+    if (kept) {
+      K.forEach((k, j) => {
+        if (!kept.includes(j)) this.flagInDoubt(out, j);
+      });
+      return;
+    }
+    if (T.length > K.length && K.every((k, i) => relate(k, T[i] as NormalizedThrow) === 'same')) {
+      this.detectFrom(out, T, K.length, recovered);
+      return;
+    }
+    this.finishTakeout(out, true);
+    this.detectFrom(out, T, 0, true);
+  }
+
+  /**
+   * The known darts (by index) that the snapshot lists, in order, if every listed dart is one
+   * of them; null otherwise. With coordinates the match is exact; without them it goes by
+   * segment and prefers the earliest darts.
+   */
+  private subsequence(T: readonly NormalizedThrow[]): number[] | null {
+    const K = this.s.known;
+    const picked: number[] = [];
+    let j = 0;
+    for (const t of T) {
+      while (j < K.length && relate(K[j] as KnownDart, t) !== 'same') j++;
+      if (j >= K.length) return null;
+      picked.push(j++);
+    }
+    return picked;
+  }
+
+  /** Flags a known dart pending review, once; its later facts stay flagged (`inDoubt`). */
+  private flagInDoubt(out: TrackerFact[], j: number): void {
+    const k = this.s.known[j] as KnownDart;
+    if (k.inDoubt || k.suspectedGhost) return;
+    const payload: EventOf<'DartUpdated'>['payload'] = { throwId: k.throwId, previous: k.segment, segment: k.segment, pendingReview: true };
+    if (k.coords) payload.coords = k.coords;
+    out.push({ type: 'DartUpdated', payload });
+    this.s.known[j] = { ...k, inDoubt: true };
+  }
+
+  /**
    * After a short outage on an empty visit: a takeout of the empty board we saw start (a hand
    * in front of the cameras, a stuck takeout) is over if the board no longer shows one. It
    * removed no darts, so it ends nothing.
@@ -327,7 +403,7 @@ export class VisitTracker {
   }
 
   private beginTakeoutIfNeeded(snap: Snapshot, out: TrackerFact[]): void {
-    if (takeoutBegins(snap) && !this.s.inTakeout) {
+    if (takeoutBegins(snap) && !this.s.inTakeout && !this.takeoutTail) {
       out.push({ type: 'TakeoutStarted', payload: { visitKey: this.s.visitKey } });
       this.s.inTakeout = true;
     }
@@ -350,6 +426,7 @@ export class VisitTracker {
     this.s.known = [];
     this.s.inTakeout = false;
     this.blindTakeout = false;
+    this.takeoutTail = false;
   }
 
   /** Leading darts that are exactly the darts of the last ended visit. */
@@ -420,14 +497,15 @@ export class VisitTracker {
     if (!sameSegment(k.segment, t.segment) || relate(k, t) === 'other') {
       const payload: EventOf<'DartUpdated'>['payload'] = { throwId: k.throwId, previous: k.segment, segment: t.segment };
       if (t.coords) payload.coords = t.coords;
-      // A re-read settles an unreadable segment, but not whether the dart is a ghost.
-      if (t.fatal || k.suspectedGhost) payload.pendingReview = true;
+      // A re-read settles an unreadable segment, but not whether the dart is a ghost or in doubt.
+      if (t.fatal || k.suspectedGhost || k.inDoubt) payload.pendingReview = true;
       out.push(t.fatal ? { type: 'DartUpdated', payload, anomaly: t.fatal } : { type: 'DartUpdated', payload });
     }
     const next: KnownDart = { throwId: k.throwId, segment: t.segment, indexInVisit: k.indexInVisit };
     const coords = t.coords ?? k.coords;
     if (coords) next.coords = coords;
     if (k.suspectedGhost) next.suspectedGhost = true;
+    if (k.inDoubt) next.inDoubt = true;
     this.s.known[i] = next;
   }
 

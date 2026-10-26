@@ -76,8 +76,13 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
       }
       case 'DartUpdated': {
         const p = e.payload;
+        // A flagged update leaves the dart in doubt for the rest of its visit. The log cannot tell
+        // an unreadable re-read (which a later clean re-read settles) from a doubtful dart (which
+        // nothing settles), so the rebuilt state keeps the doubt: more flags, never fewer (decision R).
         known = known.map((k) =>
-          k.throwId === p.throwId ? { ...k, segment: p.segment, ...(p.coords ? { coords: p.coords } : {}) } : k,
+          k.throwId === p.throwId
+            ? { ...k, segment: p.segment, ...(p.coords ? { coords: p.coords } : {}), ...(p.pendingReview ? { inDoubt: true as const } : {}) }
+            : k,
         );
         break;
       }

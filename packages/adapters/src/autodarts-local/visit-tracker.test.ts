@@ -432,3 +432,53 @@ describe('frame classification (late or duplicated frames never retract darts)',
     expect(t.classifyFrame(takeoutFinished())).toBe('apply');
   });
 });
+
+describe('a takeout first seen with darts already pulled: they were removed, not withdrawn (finding 1)', () => {
+  // T20 T19 T18; Wi-Fi drops; the takeout starts and one dart is pulled; the link returns while
+  // the takeout is still in progress. The pulled dart was thrown; the board may also have
+  // withdrawn it before the takeout began. It is kept and flagged, never withdrawn silently.
+  const X = d('T20', 0.0303, 0.6166);
+  const Y = d('T19', -0.1886, -0.5806);
+  const Z = d('T18', 0.3521, 0.4855);
+
+  it.each([
+    ['resync, middle dart pulled', 'resync', [X, Z], ['update T19->T19 review', 'takeout-start']],
+    ['resync, first dart pulled', 'resync', [Y, Z], ['update T20->T20 review', 'takeout-start']],
+    ['resync, two darts pulled', 'resync', [Z], ['update T20->T20 review', 'update T19->T19 review', 'takeout-start']],
+    ['resync, none pulled yet', 'resync', [X, Y, Z], ['takeout-start']],
+    ['live (the takeout frame was lost), middle dart pulled', 'live', [X, Z], ['update T19->T19 review', 'takeout-start']],
+    ['live, first dart pulled', 'live', [Y, Z], ['update T20->T20 review', 'takeout-start']],
+  ] as const)('%s', (_label, mode, listed, facts) => {
+    const t = online();
+    step(t, throwing(X, Y, Z));
+    expect(step(t, takeoutStarted(...listed), mode, 3000)).toEqual(facts);
+    expect(t.state().known.map((k) => k.segment.label)).toEqual(['T20', 'T19', 'T18']);
+    // The last dart out ends the visit; the board's own "Takeout finished" adds nothing, and the
+    // takeout still showing on the empty board is not a new (empty) takeout.
+    expect(step(t, takeoutStarted())).toEqual(['takeout-end']);
+    expect(step(t, takeoutFinished())).toEqual([]);
+    expect(t.state().recentVisits[0]?.map((k) => k.segment.label)).toEqual(['T20', 'T19', 'T18']);
+  });
+
+  it('a flagged dart stays flagged: rebuildVisitState restores the doubt', () => {
+    const t = online();
+    const facts: TrackerFact[] = [];
+    facts.push(...t.apply(throwing(X, Y, Z), 'live'));
+    facts.push(...t.apply(takeoutStarted(X, Z), 'resync', 3000));
+    const restored = rebuildVisitState(facts, () => '01JBX00000000000000000000V');
+    expect(restored.known).toEqual(t.state().known);
+    expect(restored.inTakeout).toBe(true);
+  });
+
+  it('a dart the takeout first seen does not know: a dart thrown offline, recovered', () => {
+    const t = online();
+    step(t, throwing(X, Y));
+    expect(step(t, takeoutStarted(X, Y, Z), 'resync', 3000)).toEqual(['detect 2:T18 recovered', 'takeout-start']);
+  });
+
+  it('other darts in a takeout first seen: a visit ended offline, inferred', () => {
+    const t = online();
+    step(t, throwing(X, Y));
+    expect(step(t, takeoutStarted(E), 'resync', 3000)).toEqual(['takeout-end inferred', 'detect 0:S12 recovered', 'takeout-start']);
+  });
+});
