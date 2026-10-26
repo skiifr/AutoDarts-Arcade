@@ -42,13 +42,14 @@ export function CountdownStage({ view, width, height, accent, showRoute }: { vie
   if (!me || width <= 0 || height <= 0) return null;
   const route = showRoute ? view.checkout : null;
   const chipsH = s(46);
-  const board = Math.min(width * 0.98, (height - chipsH * 0.4) * 1.08);
+  // The board may run up behind the title plaque, as in the approved mockup.
+  const board = Math.min(width * 0.98, height * 1.28);
   const digits = String(me.remaining).length;
   const hero = Math.min(height * 0.5, (width * 0.82) / (digits * 0.52));
   const bust = view.visit !== null && view.visit.playerId === view.current && view.visit.bust;
   return (
     <View style={{ width, height, alignItems: 'center' }}>
-      <View style={{ position: 'absolute', top: (height - chipsH - board) / 2 + chipsH * 0.25, left: (width - board) / 2, opacity: 0.72 }}>
+      <View style={{ position: 'absolute', top: (height - chipsH - board) / 2, left: (width - board) / 2, opacity: 0.85 }}>
         <StageBoard size={board} accent={accent} highlight={route ?? []} />
       </View>
       <View style={{ flex: 1, justifyContent: 'center' }}>

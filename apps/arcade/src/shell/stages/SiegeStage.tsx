@@ -185,7 +185,8 @@ export function SiegeStage({ view, width, height }: { view: SiegeView; width: nu
         </View>
       ))}
 
-      {[3, 2, 1].map((d) => {
+      {/* Far bands first, so nearer invaders overlap them. */}
+      {[1, 2, 3].map((d) => {
         const row = lane.invaders.filter((inv) => inv.distance === d);
         const size = shield * BANDS[d]!.scale * 1.55;
         return row.map((inv, i) => (

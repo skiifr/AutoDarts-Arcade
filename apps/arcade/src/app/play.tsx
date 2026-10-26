@@ -229,9 +229,10 @@ export default function PlayScreen() {
           <View style={{ flex: 1, flexDirection: 'row', gap: s(16) }}>
             <View style={{ width: columnW, paddingTop: s(12) }}>{upNow}</View>
             <View style={{ flex: 1, gap: s(4) }}>
-              <StagePlaque kind="title" title={game.name} kicker={round} accent={accent} />
+              {/* Plaques stay above the stage, which may draw up behind the title. */}
+              <StagePlaque kind="title" title={game.name} kicker={round} accent={accent} style={{ zIndex: 2 }} />
               {stage}
-              {instruction}
+              <View style={{ zIndex: 2 }}>{instruction}</View>
             </View>
             <View style={{ width: columnW, paddingTop: s(12) }}>{queue}</View>
           </View>

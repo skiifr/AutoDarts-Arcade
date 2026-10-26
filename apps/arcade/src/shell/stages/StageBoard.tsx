@@ -28,10 +28,10 @@ export function StageBoard({ size, highlight = [], accent }: { size: number; hig
       {BOARD_NUMBERS_CLOCKWISE.map((number, i) => {
         const even = i % 2 === 0;
         const beds = [
-          { band: bedBand('single-inner'), fill: even ? '#16181D' : '#5D5544', ring: 'S' as const },
-          { band: bedBand('triple'), fill: even ? '#7A1F24' : '#1E5A35', ring: 'T' as const },
-          { band: bedBand('single-outer'), fill: even ? '#16181D' : '#5D5544', ring: 'S' as const },
-          { band: bedBand('double'), fill: even ? '#7A1F24' : '#1E5A35', ring: 'D' as const },
+          { band: bedBand('single-inner'), fill: even ? '#1A1C22' : '#76694F', ring: 'S' as const },
+          { band: bedBand('triple'), fill: even ? '#97252B' : '#22703F', ring: 'T' as const },
+          { band: bedBand('single-outer'), fill: even ? '#1A1C22' : '#76694F', ring: 'S' as const },
+          { band: bedBand('double'), fill: even ? '#97252B' : '#22703F', ring: 'D' as const },
         ];
         const p = polar(i * 18, RADII.numbers);
         return (
