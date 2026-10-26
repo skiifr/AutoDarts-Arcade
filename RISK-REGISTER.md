@@ -14,22 +14,22 @@
 
 | ID | Risk | Category | Evidence | L | I | Score | Phase | Status |
 |---|---|---|---|---|---|---|---|---|
-| R01 | Undocumented local API changes, closes or adds auth (auto-updates) | Integration | ✅ | 4 | 5 | **20 High** | P1→ongoing | Open |
+| R01 | Undocumented local API changes, closes or adds auth (auto-updates) | Integration | ✅ | 4 | 5 | **20 High** | HC1→ongoing | Open |
 | R09 | Misdetected darts decide game outcomes | Product | 🟡 | 4 | 4 | **16 High** | P2–P4 | Open |
 | R10 | ID-less snapshot stream leads to lost or duplicated darts on reconnect | Integration | 🟡 | 4 | 4 | **16 High** | P2 | Open |
 | R11 | Pi 4 undersized for detection (dropped FPS, missed darts) | Hardware | ✅ | 4 | 4 | **16 High** | P1–P5 → H1 | **Accepted through P5**; decided at H1 |
-| R02 | Autodarts 2.x local stream may not carry throws at all | Integration | 🟡 | 3 | 5 | **15 High** | P1 (G1) | Open |
+| R02 | Autodarts 2.x local stream may not carry throws at all | Integration | 🟡 | 3 | 5 | **15 High** | HC1 (G1) | Open |
 | R06 | Effects too heavy for the 4K Max (2 GB, GE9215) | Performance | ✅/⚪ | 3 | 3 | 9 Med | P5 | Open |
-| R12 | Board needs the internet / Autodarts cloud to start | Dependency | ✅ | 3 | 3 | 9 Med | P1 | Accept + mitigate |
+| R12 | Board needs the internet / Autodarts cloud to start | Dependency | ✅ | 3 | 3 | 9 Med | HC1 | Accept + mitigate |
 | R13 | 2.0.2 stuck-takeout bug | Integration | 🟡 | 3 | 3 | 9 Med | P2 | Open |
-| R14 | iOS Local Network permission / ATS blocks the board | Platform | ✅ | 3 | 3 | 9 Med | P1 | Open |
+| R14 | iOS Local Network permission / ATS blocks the board | Platform | ✅ | 3 | 3 | 9 Med | HC1 | Open |
 | R16 | App suspension drops the socket, so darts are missed | Platform | 🟡 | 3 | 3 | 9 Med | P2 | Open |
 | R18 | React Native / `react-native-tvos` fork lag and library gaps | Tech stack | ✅ | 3 | 3 | 9 Med | P1→P6 | Open |
 | R21 | Scope vs capacity: four device classes, original art and sound | Delivery | ⚪ | 3 | 3 | 9 Med | all | Open |
 | R26 | An Autodarts match or other tool consumes the same darts concurrently | Integration | ⚪ | 3 | 3 | 9 Med | P2 / P4 | Open |
 | R17 | Board API key / TLS key exposed via `/api/config` and `/api/system` | Security | 🟡 | 2 | 4 | 8 Med | P2 | Open |
 | R15 | Android cleartext rules / Android 17 local-network permission | Platform | ✅ | 2 | 3 | 6 Low | P1 | Open |
-| R27 | Fire OS sideload friction (iOS resolved: TestFlight on a paid account) | Distribution | ✅/🟡 | 2 | 3 | 6 Low | P1 / P6 | Open |
+| R27 | Fire OS sideload friction (iOS resolved: TestFlight on a paid account) | Distribution | ✅/🟡 | 2 | 3 | 6 Low | HC1 / P6 | Open |
 | R03 | Autodarts ToS: third-party / commercial use | Legal | ✅ + owner-attested | 1 | 5 | 5 Low | P0 | **Mitigated:** private use, staff permission |
 | R04 | Fire TV fragmentation (Vega sticks can't run the Android build) | Platform | ✅ | 1 | 4 | 4 Low | — | **Resolved for current hardware** |
 | R20 | Clock skew corrupts ordering | Data | ⚪ | 2 | 2 | 4 Low | P2 | Mitigated by design |
@@ -54,7 +54,7 @@
   - Golden fixtures and a 30-minute re-check runbook (ROADMAP P6).
   - Board-version watch in the app.
   - Manual mode is always available.
-  - Find out in P1 whether auto-update can be paused 🔬.
+  - Find out in HC1 whether auto-update can be paused 🔬.
   - Use your Discord contact with Autodarts staff to ask about upcoming local-API changes.
 - **Early warning:** `/api/version` changes; `SourceAnomaly` events; fixture replay drift.
 - **Owner:** Lead (Owner for staff contact).
@@ -77,8 +77,12 @@
 - **Mitigation:**
   - Snapshot diff with `(visitKey, index)` idempotency.
   - Liveness polling.
-  - Resync with inferred takeouts; `recovered` darts flagged for review (ARCHITECTURE §6).
-  - P2 chaos suite: 1,000 runs, zero silent mismatches.
+  - Resync with inferred takeouts (ARCHITECTURE §6.4).
+  - Reconciliation (owner decision R):
+    - darts recovered within the same visit are scored as `recovered`, and the turn is flagged `needsReview` without a pause;
+    - an inferred takeout ends the turn `needsReview`, pads no misses, and pauses the game until a person confirms the turn (`ConfirmTurn` → `TurnReviewed`);
+    - a session can't close as completed while a flagged turn is unconfirmed.
+  - P2 chaos suite: 1,000 runs, zero silent mismatches, and a review pause after every inferred takeout.
 - **Early warning:** Chaos-suite failures; `needsReview` frequency at home.
 - **Owner:** Lead.
 
@@ -92,7 +96,7 @@
   - Correction-first UX and missed-dart recovery (R09, R10).
   - Board health shown in W1.
 - **Evidence for H1:**
-  - P1 baseline.
+  - HC1 baseline.
   - Board-health log on every session (ARCHITECTURE §9.7).
   - Repeat measurement after P5.
   - Thresholds in ROADMAP H1: > 5 % missed on-board or misread darts, cameras < 10 fps for > 10 % of game time, any throttling, or median latency > 1 s.
@@ -103,11 +107,11 @@
 ### R02 · Autodarts 2.x local stream may not carry throws — 15 High
 - **Cause:** Sources disagree. HomeDarts and DartLab report throws on 2.0.2 🟡[C2][C3]. ioBroker says 2.x "no longer provides throw data" 🟡[C4].
 - **Impact:** The core integration path is gone.
-- **Mitigation:** Gate **G1** at the start of P1. The contingencies are, in order:
+- **Mitigation:** Gate **G1** in hardware checkpoint HC1, before the live adapter is called done. The contingencies are, in order:
   1. Pin the board version.
   2. Ask Autodarts staff how to read throws locally on 2.x.
-  3. Fall back to a manual-entry arcade (ROADMAP P1).
-- **Early warning:** The P1 probe shows `state` frames without `throws` after a throw.
+  3. Fall back to a manual-entry arcade (ROADMAP HC1).
+- **Early warning:** The HC1 probe shows `state` frames without `throws` after a throw.
 - **Owner:** Lead.
 
 ### R06 · Effects too heavy for the 4K Max — 9 Medium
@@ -117,18 +121,22 @@
   - Standard quality tier.
   - Reanimated + SVG + Lottie baseline.
   - ≤ 100 animated views ✅[P16].
-  - On-device performance runs in P1 (skeleton) and P5.
+  - On-device performance runs in HC1 (skeleton) and P5.
   - Static fallbacks.
 - **Owner:** Lead.
 
 ### R12 · Board depends on the internet / Autodarts cloud — 9 Medium
 - **Cause:** "Necessary because of the structure Autodarts is built on" ✅[S4]. Auth uptime was 98.89 % for Jul–Oct 2026 ✅[S8].
-- **Mitigation:** Clear board-status messaging and manual mode. P1 tests the board with the internet unplugged 🔬. Accept the residual risk.
+- **Mitigation:** Clear board-status messaging and manual mode. HC1 tests the board with the internet unplugged 🔬. Accept the residual risk.
 - **Owner:** Lead.
 
 ### R13 · Stuck-takeout bug — 9 Medium
 - **Cause:** 2.0.2 can stick at "Takeout in progress" with no darts on the board 🟡[C12].
-- **Mitigation:** Detect after 8 s and show a banner. Reset only through the opt-in `POST /api/reset`. Re-check on each board version.
+- **Mitigation:**
+  - Detect after 8 s and show a banner telling the player to reset the board from Autodarts' own app.
+  - The banner offers *Enter manually*, so the game can go on meanwhile.
+  - Arcade never sends a reset, because it never writes to the board (owner decision S).
+  - Re-check on each board version.
 - **Owner:** Lead.
 
 ### R14 · iOS Local Network permission / ATS — 9 Medium
@@ -141,7 +149,7 @@
   - Retry.
   - Deep link to Settings.
   - `NSLocalNetworkUsageDescription`, `NSAllowsLocalNetworking` and `NSBonjourServices`.
-  - Tested on device in P1.
+  - Tested on device in HC1.
 - **Owner:** Lead.
 
 ### R16 · App suspension drops the socket — 9 Medium
@@ -154,7 +162,8 @@
 - **Mitigation:**
   - The pure-TS core is unaffected.
   - `ui-kit` only uses libraries Expo lists for TV ✅[P13].
-  - Version ADR in P1 (candidate: Expo SDK 56 + `react-native-tvos@0.85-stable`).
+  - Version ADR in P1: Expo SDK 56 + `react-native-tvos@0.85.3-3` (ADR-003).
+  - Native build CI (`native.yml`) compiles Android phone, Android TV and iOS on every code push.
   - Pinned dependencies and a scheduled upgrade window.
 - **Owner:** Lead.
 

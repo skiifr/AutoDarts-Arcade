@@ -7,7 +7,7 @@
 > - TV target: **Fire TV Stick 4K Max (Fire OS)**.
 > - Distribution with no public store listings: **TestFlight** for iPhone and iPad (paid Apple Developer account); ADB sideload for Fire TV and Android.
 > - Detection host: the current **Raspberry Pi 4 through Phase 5**. An upgrade is considered only if the post-P5 **H1 hardware review** proves it's needed.
-> - See [ROADMAP Q1–Q6](ROADMAP.md#owner-decisions-answered-2026-10-26).
+> - See [ROADMAP owner decisions Q1–Q6, R and S](ROADMAP.md#owner-decisions-answered-2026-10-26).
 > **Companion documents:** [ROADMAP.md](ROADMAP.md) · [RISK-REGISTER.md](RISK-REGISTER.md)
 
 ### Evidence legend
@@ -19,7 +19,7 @@ Every factual claim carries one of these marks. Bracketed IDs refer to [§12 Sou
 | ✅ **Verified** | Read in an official or primary source, or in source code. |
 | 🟡 **Community** | Reported by a third-party project, forum or fixture. Autodarts has not confirmed it. |
 | ⚪ **Assumption** | Our own inference or design target, not yet proven. |
-| 🔬 **Probe** | Can only be confirmed on *your* board or devices. Phase 1 checks these. |
+| 🔬 **Probe** | Can only be confirmed on *your* board or devices. Hardware checkpoint HC1 (ROADMAP) checks these. |
 
 ---
 
@@ -51,7 +51,7 @@ Every factual claim carries one of these marks. Bracketed IDs refer to [§12 Sou
 | D3 | **We integrate through the local board API only, read-only, with no new services.** The app talks to `ws://<board>:3180/api/events` and `GET /api/state` directly. | The cloud API is off-limits: the ToS bans unauthorised third-party software ✅[S3], and Autodarts reportedly issues no third-party client IDs 🟡[C13]. Nothing gets deployed on the Pi, which matches the brief's "do not deploy services". |
 | D4 | **The engine is event-sourced.** Game state is a pure fold over an append-only log, and corrections are new events that trigger a replay. | It makes corrections, crash recovery, reconnection and testing one mechanism instead of four. |
 | D5 | **The host device is the single writer.** | The device showing the game owns the log. Phones send *commands*, which removes multi-device conflicts. |
-| D6 | **Phase 1 opens with a go/no-go hardware probe.** | Whether Autodarts **2.x** still streams throws locally is *disputed* (🟡[C3][C2] say yes, 🟡[C4] says no). Everything else depends on it. |
+| D6 | **A go/no-go hardware probe gates the live board adapter** (G1, in hardware checkpoint HC1). | Whether Autodarts **2.x** still streams throws locally is *disputed* (🟡[C3][C2] say yes, 🟡[C4] says no). Everything else depends on it. |
 | D7 | **Private home use, installed directly.** APK sideload onto the 4K Max and Android; TestFlight on iOS. No store listings. | Owner decision. The GPL, app-name and App Review concerns only apply to public store releases ✅[P21][P24]. Commercial use stays out of scope ✅[S3]. |
 
 ---
@@ -63,7 +63,7 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 | Brief says | Finding | What we changed |
 |---|---|---|
 | "Inspect **ludarts** and **IO-Darts-Agent**" | **"ludarts" does not exist.** We searched GitHub, npm, PyPI, Docker Hub and GitLab. It probably means *lidarts*, an unrelated AGPL web scorer ✅[C7]. **IO-Darts-Agent exists** ✅[C6]. It is cloud-based, ~0 stars, and *PolyForm Noncommercial* licensed (its `module-sdk/` is MIT). | We reviewed both, plus the projects that actually matter: HomeDarts, dartcade, DartLab, ioBroker, Chade's client and darts-caller (§4.5). |
-| "Preserve existing AutoDarts detection" (assumes a stable API) | **Autodarts 2.x shipped in Sept 2026.** It removed the port-3180 Board Manager UI ("not supported from version 2 on") ✅[S1], moved to `autodarts.com`, retired the Keycloak login, and auto-updates ✅[S7]. | The adapter layer is isolated, version-detected and contract-tested. The Phase 1 probe is a gate. |
+| "Preserve existing AutoDarts detection" (assumes a stable API) | **Autodarts 2.x shipped in Sept 2026.** It removed the port-3180 Board Manager UI ("not supported from version 2 on") ✅[S1], moved to `autodarts.com`, retired the Keycloak login, and auto-updates ✅[S7]. | The adapter layer is isolated, version-detected and contract-tested. The HC1 probe is a gate. |
 | "Prioritize … performance on Raspberry Pi 4" | The Pi 4 is already at the edge just running detection ✅[S4]. A community report describes a Pi 4 with 3 cameras freezing at 0 FPS 🟡[C14]. | The Pi 4 does **detection only**. Rendering moves to the display device. |
 | "React/TypeScript frontend" | A web frontend can't be a native app on iPhone, iPad or Fire TV without a wrapper. App Store rule 4.2 rejects repackaged websites ✅[P21]. | **React Native** + TypeScript, which is still React. |
 | "Fire Stick" (implicit) | There are now **two Fire TV operating systems**. Fire OS (Android-based) runs on the 4K Max (both generations), 4K 2nd gen, 4K Plus, HD 2024 and Lite. **Vega OS** (Linux-based, *cannot run Android apps*) runs on the 4K Select 2025, HD 2026 and 4K 3rd gen 2026 ✅[P1]. Amazon says all future sticks will run Vega 🟡[P11]. | **Resolved:** your 4K Max runs Fire OS, so it runs the shared Android build. Vega is a backlog item (§3.3). |
@@ -84,7 +84,7 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 
 ### 3.2 Non-functional requirements (added)
 
-| ID | Requirement | Target ⚪ (Phase 1 refines these) |
+| ID | Requirement | Target ⚪ (HC1 refines these) |
 |---|---|---|
 | NF1 | **Native installable app** on iPhone, iPad, Android and Fire TV | the hard requirement |
 | NF2 | Dart on screen after the board reports it | ≤ 150 ms from WebSocket frame to first visual |
@@ -134,7 +134,7 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 | 0.x / 1.x (legacy) | Browser **Board Manager at `:3180`**. Root systemd unit. Board ID + API key. Keycloak login | ✅[S1] 🟡[C2] |
 | **2.0.0 → 2.0.2 stable**, 2.1.0-beta.5 | Board Manager UI removed. Autodarts Desktop or headless + `autodarts` CLI. **User** systemd unit. QR/short-code pairing. Velopack auto-update | ✅[S1][S6][S7] |
 | June 2026 | Keycloak retired. OAuth 2.0 (PKCE / device flow). `grant_type=password` ended | 🟡[C9] |
-| 2.0.2 bug | A takeout can stick at "Takeout in progress" with `numThrows: 0`. Darts are not counted until `POST /api/reset` | 🟡[C12] |
+| 2.0.2 bug | A takeout can stick at "Takeout in progress" with `numThrows: 0`. Darts are not counted until the board is reset | 🟡[C12] |
 
 **Builds**
 - Headless 2.0.2 is published for linux-arm64 and **linux-armv7l**, so the Pi 4 is still a published target ✅[S6].
@@ -151,7 +151,7 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 
 | Method | Status | Verdict |
 |---|---|---|
-| **Local board API** (`ws://:3180/api/events`, `GET /api/state`) | Undocumented. "Board Manager … not supported from version 2" ✅[S1]. Still used on 2.0.2 by HomeDarts and DartLab 🟡[C2][C3]. ioBroker says 2.x **no longer returns throws** 🟡[C4] | **Chosen.** Gated by the 🔬 Phase 1 probe |
+| **Local board API** (`ws://:3180/api/events`, `GET /api/state`) | Undocumented. "Board Manager … not supported from version 2" ✅[S1]. Still used on 2.0.2 by HomeDarts and DartLab 🟡[C2][C3]. ioBroker says 2.x **no longer returns throws** 🟡[C4] | **Chosen.** Gated by the 🔬 HC1 probe |
 | Cloud WebSocket (`play.ws.autodarts.com`) | Reverse-engineered. Works only by impersonating the first-party `autodarts-play` client with a password login 🟡[C6][C4] | **Rejected:** violates the spirit of ToS §3.2(5) ✅[S3], needs internet, and no third-party client IDs exist 🟡[C13] |
 | Browser extensions / DOM hooks | Hooks the web app's socket in a desktop browser 🟡[C9] | Not applicable to native apps |
 | darts-caller relay (`:8079`) | Depends on darts-caller's cloud login 🟡[C8] | Rejected, same reasons as cloud |
@@ -163,13 +163,13 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 
 | Endpoint | Use in Arcade | Evidence |
 |---|---|---|
-| `WS /api/events` | **Yes.** Primary stream | 🟡[C1][C2][C10] |
+| `WS /api/events` | **Yes.** Primary stream. An optional `?type=state` query asks for `state` frames only 🔬 | 🟡[C1][C2][C10] |
 | `GET /api/state` | **Yes.** Snapshot on connect, idle liveness poll | 🟡[C2][C4] |
 | `GET /api/version` | Yes, to pick the adapter profile | 🟡[C2] |
 | `GET /api/state/stats`, `/api/cams/stats` | Optional, for health (FPS, CPU) | 🟡[C2] |
-| `POST /api/reset` | **Opt-in only**, to clear the stuck-takeout bug | 🟡[C2][C12] |
 | `GET /api/config`, `GET /api/system` | **Forbidden.** They return the board **API key** and **TLS key** | 🟡[C2] |
-| start/stop, calibration, restart, upstream connect, `PATCH /api/config` | **Forbidden.** They modify Autodarts | 🟡[C2] |
+| `WS /api/events/system` | **Forbidden.** Not needed, and what it carries is unchecked | ⚪ |
+| Anything that writes: reset, start/stop, calibration, restart, upstream connect, `PATCH /api/config` | **Forbidden.** **The app never writes to the board** (owner decision S). A stuck takeout is reset from Autodarts' own app (§6.3) | 🟡[C2] |
 
 **Frame envelope:** `{"type": "state" | "cam_state" | "motion_state" | "stats" | "cam_stats", "data": {…}}` 🟡[C1][C2].
 
@@ -368,7 +368,7 @@ autodarts-arcade/
 │  ├─ platform/          ports: Transport, LogStore, AudioPort, Discovery, KeepAwake (+ impls)
 │  ├─ ui-kit/            focus-aware RN components, theme, dartboard picker, quality tiers
 │  └─ effects/           GameEffect → animation/sound mapping, effect queue
-└─ fixtures/             recorded board sessions from YOUR board (Phase 1), golden logs
+└─ fixtures/             recorded board sessions from YOUR board (HC1), golden logs
 ```
 
 **Dependency rule** (enforced by lint): `engine`, `games`, `adapters` and `event-schema` import nothing from React, React Native or `platform`. They run identically in the app, in Node tests and in the CLI.
@@ -429,12 +429,13 @@ for i in 0..max(len(throws), len(known))-1:
 |---|---|
 | **Normal dart** | `DartDetected` → host emits `DartThrown` for the current player, with `dartIndex = indexInVisit`. |
 | **Miss** (on-board outside the doubles, or off-board) | Normalized to `bed: "miss"`, `points: 0`. Keeps `missSector` when given (`M12`), which is useful for "near-miss" effects and stats. |
-| **Bounce-out or fallen dart** (usually *not* detected) | At `TakeoutFinished` with fewer than 3 darts, the house rule `missingDartsAreMisses` (default **on**) appends `DartAdded{reason:'undetected'}` as misses. Players can relabel one as "bounce-out" in W4. |
+| **Bounce-out or fallen dart** (usually *not* detected) | At an **observed** `TakeoutFinished` with fewer than 3 darts, the house rule `missingDartsAreMisses` (default **on**) appends `DartAdded{reason:'undetected'}` as misses. Players can relabel one as "bounce-out" in W4. An inferred takeout is never padded (§6.4). |
 | **Board changes its mind** (`DartUpdated` / `DartWithdrawn`) | Host appends `DartCorrected{reason:'source-update'}` / `DartVoided{reason:'source-withdrawn'}`, then replays. The UI shows a subtle "adjusted" chip. |
 | **User correction** | W4 sends commands: `CorrectDart` / `VoidDart` / `AddDart`. Host appends the event and replays. Any dart in the session is correctable, including after "game over" (results stay *provisional* until the next action). |
 | **Takeout** | `TakeoutFinished` ends the turn. On the 3rd dart (board status `Takeout`) the UI already shows "Remove darts". |
+| **Uncertain history after a reconnect** (owner decision R) | Same-visit darts are scored as `recovered` and the turn is flagged `needsReview`, with no pause. A takeout that may have happened offline (`TakeoutFinished{inferred:true}`) ends the turn `needsReview`, pads nothing and pauses the game until a person confirms the turn. Details in §6.4. |
 | **Takeout with 0 darts** (hand in front of the cameras) | Ignored by default. A setting can make it count as "skip turn". |
-| **Stuck takeout** (2.0.2 bug 🟡[C12]) | `Takeout in progress` with no darts for > 8 s → banner "Board stuck. Reset board?" `POST /api/reset` is sent only if the user enabled *Board control* in settings. |
+| **Stuck takeout** (2.0.2 bug 🟡[C12]) | `Takeout in progress` with no darts for > 8 s → `BoardStatusChanged{status:'stuck-takeout'}` and a banner telling the player to reset the board from Autodarts' own app, with *Enter manually* as the way to keep playing. Arcade never sends a reset itself: it never writes to the board (owner decision S). |
 | **Darts already on the board at game start** | They are treated as baseline, not scored. The UI says "Clear the board to start". |
 | **Autodarts corrections in its own web UI** | Not applicable: Arcade sessions are not Autodarts matches. Don't run an Autodarts match at the same time (R26). |
 
@@ -450,13 +451,27 @@ for i in 0..max(len(throws), len(known))-1:
 
 **Resync** compares the snapshot to `known[]`:
 
-| Snapshot vs `known[]` | Interpretation | Action |
-|---|---|---|
-| Same prefix, maybe more darts | Same visit | Emit only the new darts, flagged `recovered: true` |
-| Empty | A takeout happened offline | Synthesize `TakeoutFinished{inferred:true}` |
-| Different prefix | Visit boundary happened offline | Synthesize `TakeoutFinished{inferred:true}`, then new darts as `recovered` |
+| Snapshot vs `known[]` | Interpretation | Adapter emits | Host does |
+|---|---|---|---|
+| Same prefix, maybe more darts | Same visit | Only the new darts, flagged `recovered: true` | Scores them as `DartThrown{origin:'recovered'}`. The turn goes on, and its `TurnEnded` carries `needsReview: true`. **No pause** |
+| Empty (while `known[]` had darts) | A takeout may have happened offline | `TakeoutFinished{inferred:true}` | **Review pause** (below) |
+| Different prefix | A visit boundary may have happened offline | `TakeoutFinished{inferred:true}`, then the new darts as `recovered` | **Review pause**. The new darts are held for the next turn |
 
-**Recovered darts are scored, but the host marks the affected turn ⚠ "Needs review"** (W3 badge, one press to W4). The system never guesses silently.
+**Reconciliation (owner decision R).** The system never guesses silently: every uncertain turn is flagged ⚠ "Needs review" (W3 banner, one press to W4).
+
+**Review pause.** Whenever a takeout was inferred:
+1. The host ends the current turn with `TurnEnded{reason:'takeout', needsReview:true}`. It does **not** pad missing darts as misses: `missingDartsAreMisses` applies only to observed takeouts.
+2. It appends `GamePaused{reason:'review'}` and does not start the next turn.
+3. A person checks the turn in W4, corrects it if needed, and confirms with the command `ConfirmTurn{turnIndex}`. The host appends `TurnReviewed{playerId, turnIndex}`, then `GameResumed{reason:'review'}`, then the next `TurnStarted`.
+4. Board darts that arrive during the pause are **held**, not dropped, and are attributed to the next turn when it starts.
+
+A `needsReview` turn without a pause (same-visit recovery) is confirmed the same way. `ConfirmTurn` then only appends `TurnReviewed`.
+
+**Finishing with unconfirmed turns.** While any `needsReview` turn has no matching `TurnReviewed`:
+- `GameFinished` stays provisional;
+- the host refuses `CloseSession{outcome:'completed'}`.
+
+`CloseSession{outcome:'abandoned'}` is always allowed.
 
 **App lifecycle.**
 - iOS drops sockets when the app is suspended 🟡. Arcade keeps the screen awake during games and runs **resync on foreground**.
@@ -553,6 +568,8 @@ export interface Segment {
 | `SourceConnectionChanged` | `{ state: 'connecting'\|'resyncing'\|'online'\|'offline', attempt?: number, error?: string }` |
 | `SourceAnomaly` | `{ rawExcerpt: string, note: string }` (unknown enum or shape; raw excerpt is size-capped) |
 
+`recovered: true` marks a dart first seen in a resync snapshot. `inferred: true` marks a takeout the adapter did not see happen. The host treats both as uncertain (§6.4).
+
 ### 7.5 Layer 2: game facts (from the host)
 
 | `type` | `payload` |
@@ -563,12 +580,13 @@ export interface Segment {
 | `DartCorrected` | `{ throwId, previous: Segment, segment, reason: 'user'\|'source-update' }` |
 | `DartVoided` | `{ throwId, reason: 'false-detection'\|'duplicate'\|'source-withdrawn'\|'user' }` |
 | `DartAdded` | `{ throwId, playerId, turnIndex, dartIndex, segment, reason: 'undetected'\|'bounce-out'\|'manual-mode' }` |
-| `TurnEnded` | `{ playerId, turnIndex, reason: 'takeout'\|'bust'\|'game-rule'\|'manual-skip', needsReview?: true }` |
-| `GamePaused` / `GameResumed` | `{ reason: 'menu'\|'correction'\|'board-offline'\|'app-background' }` |
-| `GameFinished` | `{ standings: { playerId, rank, score }[], provisional: true }` |
-| `SessionClosed` | `{ outcome: 'completed'\|'abandoned', finalStandings }` |
+| `TurnEnded` | `{ playerId, turnIndex, reason: 'takeout'\|'bust'\|'game-rule'\|'manual-skip', needsReview?: true }`. `needsReview` is set when the turn has a `recovered` dart or ended on an inferred takeout (§6.4) |
+| `TurnReviewed` | `{ playerId, turnIndex }`. A person confirmed a `needsReview` turn (`ConfirmTurn`) |
+| `GamePaused` / `GameResumed` | `{ reason: 'menu'\|'correction'\|'board-offline'\|'app-background'\|'review' }`. `review` holds the next turn until `TurnReviewed` (§6.4) |
+| `GameFinished` | `{ standings: { playerId, rank, score }[], provisional: true }`. Stays provisional while any `needsReview` turn has no `TurnReviewed` |
+| `SessionClosed` | `{ outcome: 'completed'\|'abandoned', finalStandings }`. `completed` is refused while any `needsReview` turn has no `TurnReviewed`; `abandoned` is always allowed |
 
-**Commands** (UI or companion → host): `StartSession`, `CorrectDart`, `VoidDart`, `AddDart`, `SkipTurn`, `Pause`, `Resume`, `Rematch`, `CloseSession`. Each carries a `commandId`, which becomes the resulting events' `causationId`. A retried command is therefore applied at most once.
+**Commands** (UI or companion → host): `StartSession`, `CorrectDart`, `VoidDart`, `AddDart`, `SkipTurn`, `ConfirmTurn{turnIndex}`, `Pause`, `Resume`, `Rematch`, `CloseSession`. Each carries a `commandId`, which becomes the resulting events' `causationId`. A retried command is therefore applied at most once.
 
 ### 7.6 Example: a detected S5 corrected to S1
 
@@ -636,7 +654,8 @@ Adding a game means **one folder plus one registry line**.
 | Situation | Behaviour |
 |---|---|
 | Darts 1–3 detected | `DartThrown` for the current player, `dartIndex` 0–2 |
-| `TakeoutFinished` | `TurnEnded{reason:'takeout'}`; pad missing darts per `missingDartsAreMisses` |
+| `TakeoutFinished` (observed) | `TurnEnded{reason:'takeout'}`; pad missing darts per `missingDartsAreMisses` |
+| `TakeoutFinished{inferred:true}` | `TurnEnded{reason:'takeout', needsReview:true}` with no padding, then the review pause (§6.4) |
 | Game returns `endTurn:'bust'` | Later darts in the visit are shown greyed and not scored. The turn ends at takeout |
 | Board offline mid-turn | `GamePaused{board-offline}`. After 5 s the UI offers *Enter manually*. On reconnect, resync (§6.4) |
 | Manual mode (no board) | Darts arrive as `DartAdded{reason:'manual-mode'}` from the W4 picker. Turn ends on "Next player" |
@@ -696,9 +715,11 @@ Before release, names and mechanics are checked against BattleUp's catalogue so 
 
 ### 9.5 Security and privacy
 
-- **Endpoint allowlist in the transport.** Only `WS /api/events`, `GET /api/state`, `GET /api/version` and the stats endpoints are allowed, plus an opt-in `POST /api/reset`.
-  - A unit test fails the build if any other path appears.
-  - This blocks `/api/config` and `/api/system`, which return the board **API key and TLS key** 🟡[C2].
+- **Endpoint allowlist in the transport.** The app never writes to the board (owner decision S). Only these are allowed:
+  - `GET /api/state`, `/api/version`, `/api/state/stats` and `/api/cams/stats`;
+  - `WS /api/events`, optionally with `?type=state`.
+  - A unit test fails the build if any other path, or any method other than GET, appears.
+  - This blocks `/api/events/system`, and `/api/config` and `/api/system`, which return the board **API key and TLS key** 🟡[C2].
 - **No Autodarts credentials** are ever requested or stored.
 - **Player data** (names, avatars, stats) stays on-device. No accounts and no analytics in v1, so the App Store privacy label is "Data Not Collected".
 - **Diagnostic exports** (raw-frame ring buffer) are user-initiated through the share sheet and secret-free, because those endpoints are never fetched.
@@ -727,7 +748,7 @@ The Pi 4 stays until after Phase 5 (§4.6), so the app quietly collects the evid
 
 Bounce-outs are kept separate, because no hardware can detect them.
 
-**Not readable through the API:** thermal throttling. The owner runs `vcgencmd get_throttled` on the Pi at the P1 baseline and again at H1. This is read-only.
+**Not readable through the API:** thermal throttling. The owner runs `vcgencmd get_throttled` on the Pi at the HC1 baseline and again at H1. This is read-only.
 
 **Storage and privacy:** all data stays on-device. W1's Settings shows a per-session summary, and a share-sheet export provides the H1 report input.
 
@@ -825,10 +846,14 @@ Game names are original placeholders.
  Takeout:   ┌───────────────────── REMOVE DARTS ─────── Next up: JO ─────────────┐
  Offline:   ┌──── ⚠ Board connection lost — reconnecting (try 3) [Enter manually]┐
  Review:    ┌──── ⚠ Turn 11 needs review — darts recovered after reconnect [Fix] ┐
- Stuck:     ┌──── Board stuck in takeout. [Reset board] (only if Board control on)┐
+ Paused:    ┌──── ⏸ Board may have been cleared while offline — check turn 11 [Review]┐
+ Stuck:     ┌──── ⛔ Board stuck in takeout — reset it in the Autodarts app [Enter manually]┐
 ```
 
 - `DartThrown` updates the dart list, plays the stage effect and sound. `TakeoutStarted` shows the banner. `TurnEnded` plays the next-player transition (≤ 600 ms).
+- **Needs review** (§6.4, owner decision R):
+  - *Review*: darts recovered within the same visit. Play goes on, and the banner stays until the turn is confirmed in W4.
+  - *Paused*: a takeout may have happened offline. Play stops, and the next player's turn starts only after someone confirms the turn in W4. Darts thrown meanwhile are held for that next turn.
 - **TV:** OK or Menu opens pause. "Fix" is one D-pad press away. Home → "Game paused" ✅[P8].
 - **Phone:** stage on top, standings as a chip row, dart list below.
 
@@ -854,6 +879,7 @@ Game names are original placeholders.
 
 - **Preview** dry-runs the replay with the proposed change, so consequences such as eliminations or a different winner are visible before applying.
 - **Apply** appends `DartCorrected`, `DartVoided` or `DartAdded`. Earlier turns are reachable for the whole session.
+- **Review mode** (opened from a needs-review banner): `recovered` darts are marked, and after an inferred takeout missing darts show as empty slots, not misses. **Confirm turn** sends `ConfirmTurn{turnIndex}` once the corrections are done, which also ends a review pause.
 - **Target:** the common fixes (wrong bed, miss ↔ hit, add a bounce-out) take **≤ 5 remote presses** from W3.
 
 ### W5 · Victory
@@ -872,6 +898,7 @@ Game names are original placeholders.
 
 - `GameFinished` is **provisional**. A correction can withdraw the victory and resume play.
 - `SessionClosed` is written, and stats committed, only when the players pick Rematch, New game or Menu.
+- While a turn still needs review, those actions open W4 for it first, because the host refuses to close the session as completed (§6.4). Quitting (abandon) always works.
 - The celebration can be skipped with OK after 1.5 s.
 
 ---
@@ -881,7 +908,7 @@ Game names are original placeholders.
 | Capability or fact | Status |
 |---|---|
 | Autodarts 2.x removed the `:3180` Board Manager UI; local API undocumented | ✅[S1] |
-| Local `ws://:3180/api/events` still streams throws on 2.x | 🟡 disputed ([C2][C3] yes, [C4] no) → **🔬 Phase 1 gate** |
+| Local `ws://:3180/api/events` still streams throws on 2.x | 🟡 disputed ([C2][C3] yes, [C4] no) → **🔬 HC1 gate (G1)** |
 | Local API needs no auth | 🟡[C2][C3] → 🔬 |
 | Frame field names, enums, miss shapes, coords convention | 🟡[C1][C2][C3] → 🔬 recorded fixtures |
 | Board withdraws or updates darts in place | 🟡[C2] → 🔬 |
@@ -889,10 +916,10 @@ Game names are original placeholders.
 | mDNS `_autodarts-board._tcp` on 2.x | 🟡[C15] → 🔬 |
 | Board needs the internet at start | ✅[S4] (v1 FAQ) / 🟡 for v2 → 🔬 |
 | Pi 4 marginal for detection; don't render on it | ✅[S4] |
-| Your Pi 4's actual CPU, thermal and FPS headroom | 🔬 P1 baseline → H1 review after P5 |
+| Your Pi 4's actual CPU, thermal and FPS headroom | 🔬 HC1 baseline → H1 review after P5 |
 | ToS bans unauthorised third-party / commercial use | ✅[S3] |
 | Autodarts staff permit this project for private home use | **Owner-attested** (Autodarts Discord); not independently verified |
-| Your TV stick (4K Max) runs Fire OS and accepts ADB sideloading | ✅[P1][P26] → 🔬 install dry run in P1 |
+| Your TV stick (4K Max) runs Fire OS and accepts ADB sideloading | ✅[P1][P26] → 🔬 install dry run in HC1 |
 | iOS private install via TestFlight on the owner's paid Apple Developer account | decided (owner); 90-day build lifetime 🟡[P27] |
 | No official third-party API or client IDs | ✅ (none published) / 🟡[C13] (Autodarts' reply) |
 | Fire TV models and their OS (Fire OS vs Vega) | ✅[P1] |

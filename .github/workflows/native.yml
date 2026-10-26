@@ -1,0 +1,134 @@
+# Native build validation. ci.yml only exports the web build (react-native-web), which never
+# exercises react-native-tvos, the TV manifest or any native module. This workflow runs Expo
+# prebuild and compiles the real Android (phone and TV) and iOS simulator projects.
+# The builds are unsigned debug builds: they prove the native projects compile, nothing more.
+name: Native builds
+
+on:
+  push:
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - '.github/workflows/native.yml'
+      - '!**/*.md'
+  workflow_dispatch:
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android (${{ matrix.variant }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: phone
+            expo_tv: '0'
+          - variant: tv
+            expo_tv: '1'
+    env:
+      # Read by @react-native-tvos/config-tv at prebuild. Must be '0' or '1': an empty value is an error.
+      EXPO_TV: ${{ matrix.expo_tv }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Free disk space
+        # A React Native build for four ABIs needs several GB; drop toolchains this job never uses.
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost
+          df -h /
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: yarn
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Cache Gradle
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ matrix.variant }}-${{ hashFiles('yarn.lock', 'apps/arcade/app.json') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-${{ matrix.variant }}-
+            gradle-${{ runner.os }}-
+
+      - run: yarn install --frozen-lockfile
+
+      - name: Expo prebuild (android)
+        working-directory: apps/arcade
+        run: npx expo prebuild --platform android --clean
+
+      - name: Check the generated manifest
+        run: |
+          manifest=apps/arcade/android/app/src/main/AndroidManifest.xml
+          fail() { echo "::error::$1 ($manifest)"; exit 1; }
+          grep -q 'android:usesCleartextTraffic="true"' "$manifest" || fail "usesCleartextTraffic is not set"
+          if [ "$EXPO_TV" = "1" ]; then
+            grep -q 'android.software.leanback' "$manifest" || fail "TV build has no leanback feature"
+            grep -q 'android.intent.category.LEANBACK_LAUNCHER' "$manifest" || fail "TV build has no LEANBACK_LAUNCHER category"
+          elif grep -q 'android.software.leanback' "$manifest"; then
+            fail "Phone build has TV entries"
+          fi
+
+      - name: Build debug APK
+        working-directory: apps/arcade/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: arcade-android-${{ matrix.variant }}-debug
+          path: apps/arcade/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  ios:
+    name: iOS (simulator)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: yarn
+
+      - run: yarn install --frozen-lockfile
+
+      - name: Expo prebuild (ios)
+        working-directory: apps/arcade
+        run: npx expo prebuild --platform ios --clean --no-install
+
+      - name: Install pods
+        working-directory: apps/arcade/ios
+        run: pod install
+
+      - name: Build for the iOS simulator
+        working-directory: apps/arcade/ios
+        # Project and scheme names come from the app name "AutoDarts Arcade" in app.json.
+        run: |
+          xcodebuild build \
+            -workspace AutoDartsArcade.xcworkspace \
+            -scheme AutoDartsArcade \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            -quiet \
+            CODE_SIGNING_ALLOWED=NO
