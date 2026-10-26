@@ -1,4 +1,5 @@
 import {
+  isBoardFact,
   points,
   type ArcadeEvent,
   type EventOf,
@@ -72,6 +73,12 @@ export interface TurnRecord {
     paddingApplies: boolean;
   } | null;
   reviewed: boolean;
+  /**
+   * Started when a review pause ended (by ConfirmTurn, or as its held visits ended). The outage
+   * behind the pause may have hidden any number of visits, so whether this player is really up
+   * is the game's guess: the turn is flagged.
+   */
+  readonly afterReview: boolean;
   rev: number;
 }
 
@@ -151,6 +158,12 @@ export class SessionFolder {
   readonly paused: PauseReason[] = [];
   awaitingReviewTurn: number | null = null;
   private readonly unreviewed = new Set<number>();
+  /**
+   * A review pause has just ended and its release is running: the engine events that follow
+   * GameResumed{review} (held darts thrown, their visits ended, turns started) until the next
+   * board fact or person's input. Every turn started meanwhile is `afterReview`.
+   */
+  private releasing = false;
   lastGameFinished: { seq: number; standings: readonly Standing[] } | null = null;
   lastTurnStartedSeq = 0;
   closed: { outcome: 'completed' | 'abandoned'; finalStandings: readonly Standing[] } | null = null;
@@ -201,6 +214,7 @@ export class SessionFolder {
     for (const t of this.unreviewed) c.unreviewed.add(t);
     c.lastGameFinished = this.lastGameFinished;
     c.lastTurnStartedSeq = this.lastTurnStartedSeq;
+    c.releasing = this.releasing;
     c.closed = this.closed;
     for (const id of this.causationIds) c.causationIds.add(id);
     for (const [turn, cached] of this.viewCache) c.viewCache.set(turn, cached);
@@ -310,12 +324,23 @@ export class SessionFolder {
   }
 
   /**
-   * The turn's darts alone would flag it when it ends (§7.5): a recovered or pendingReview
-   * dart, or more than three darts in one visit.
+   * The turn will be flagged when it ends, whatever ends it (§7.5): a recovered or pendingReview
+   * dart, more than three darts in one visit, or a review pause behind it. A review pause holds
+   * the game after a takeout that may have happened offline, and the outage may have hidden any
+   * number of visits (or none). So whoever the game names next when it ends (`afterReview`),
+   * and whoever gets the darts that arrived meanwhile (held darts, also in the turns after that),
+   * is a guess.
    */
-  uncertainDarts(turn: TurnRecord): boolean {
+  flaggedAtEnd(turn: TurnRecord): boolean {
     const live = this.liveDarts(turn);
-    return live.length > 3 || live.some((d) => d.origin === 'recovered' || this.boardDarts.get(d.throwId)?.pendingReview === true);
+    return (
+      turn.afterReview ||
+      live.length > 3 ||
+      live.some((d) => {
+        const bd = this.boardDarts.get(d.throwId);
+        return d.origin === 'recovered' || bd?.pendingReview === true || bd?.phase === 'review';
+      })
+    );
   }
 
   /**
@@ -325,7 +350,7 @@ export class SessionFolder {
    * once the game is over, so for a finished game only the live turn's darts count.)
    */
   liveTurnUnreviewed(): boolean {
-    return (this.active !== null && this.uncertainDarts(this.active)) || this.heldVisits().length > 0;
+    return (this.active !== null && this.flaggedAtEnd(this.active)) || this.heldVisits().length > 0;
   }
 
   private gamePass(): GamePass {
@@ -375,13 +400,16 @@ export class SessionFolder {
     if (e.seq !== this.lastSeq + 1) corrupt(`expected seq ${this.lastSeq + 1}, got ${e.seq}`);
     if (this.closed) corrupt(`event ${e.seq} follows SessionClosed`);
     this.lastSeq = e.seq;
+    if (e.type === 'GameResumed' && e.payload.reason === 'review') this.releasing = true;
+    else if (isBoardFact(e) || e.source.kind === 'manual') this.releasing = false;
+    const afterReview = this.releasing;
     if (e.causationId !== undefined) this.causationIds.add(e.causationId);
 
     switch (e.type) {
       case 'SessionStarted':
         return this.onSessionStarted(e);
       case 'TurnStarted':
-        return this.onTurnStarted(e);
+        return this.onTurnStarted(e, afterReview);
       case 'DartThrown':
         return this.onDartThrown(e);
       case 'DartAdded':
@@ -484,7 +512,7 @@ export class SessionFolder {
     );
   }
 
-  private onTurnStarted(e: EventOf<'TurnStarted'>): void {
+  private onTurnStarted(e: EventOf<'TurnStarted'>, afterReview: boolean): void {
     const p = e.payload;
     if (this.active) corrupt(`turn ${p.turnIndex} started while turn ${this.active.turnIndex} is live`);
     if (p.turnIndex !== this.turns.length) corrupt(`expected turn ${this.turns.length}, got ${p.turnIndex}`);
@@ -497,6 +525,7 @@ export class SessionFolder {
       entries: [],
       end: null,
       reviewed: false,
+      afterReview,
       rev: 0,
     };
     this.turns.push(turn);

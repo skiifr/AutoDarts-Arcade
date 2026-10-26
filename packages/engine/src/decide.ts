@@ -454,7 +454,7 @@ export class Decider {
     if (o.pad && f.houseRules.missingDartsAreMisses) {
       for (let i = f.liveCount(turn); i < 3; i++) this.pad(turn, i, o.causationId);
     }
-    const needsReview = o.flag || f.uncertainDarts(turn);
+    const needsReview = o.flag || f.flaggedAtEnd(turn);
     this.batch.emit({
       type: 'TurnEnded',
       payload: {
