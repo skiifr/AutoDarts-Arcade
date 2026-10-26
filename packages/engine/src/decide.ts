@@ -364,7 +364,12 @@ export class Decider {
 
   // ── Turn policy ───────────────────────────────────────────────────────────
 
-  /** Board darts that arrived during the review pause go to the turn that has just started. */
+  /**
+   * What a review pause held goes to the turn that has just started: the board darts that
+   * arrived meanwhile, visit by visit, and the visit ends after them. A visit the board may
+   * have ended offline (an inferred takeout, even of a visit with no darts) ends that turn
+   * flagged and pauses for its review in turn.
+   */
   private releaseHeld(): void {
     const f = this.f;
     for (const { visit, darts } of f.heldVisits()) {
@@ -375,7 +380,7 @@ export class Decider {
       if (!f.active) return;
       const end = visit.ended;
       // Only an end the board reported after these darts closes their visit.
-      if (end === null || end.seq < darts.at(-1)!.seq) continue;
+      if (end === null || end.seq < (darts.at(-1)?.seq ?? 0)) continue;
       const base = { source: this.engine, occurredAt: this.batch.now, causationId: end.eventId };
       if (end.kind === 'takeout' && end.inferred) {
         this.endTurn({ ...base, reason: 'takeout', pad: false, flag: true, reviewPause: true });
@@ -470,12 +475,16 @@ export class Decider {
     for (let i = f.liveCount(turn); i < 3; i++) this.pad(turn, i, causationId);
   }
 
-  /** After a correction: record a new or changed result, or restart play if the finish was withdrawn. */
+  /**
+   * After a correction: record a new or changed result, or restart play if the finish was
+   * withdrawn (and hand that turn whatever a review pause was still holding when the game ended).
+   */
   private afterChange(causationId: string): void {
     const f = this.f;
     this.checkFinished(causationId);
     if (!f.isFinished() && !f.active && f.turns.length > 0 && !f.paused.includes('review')) {
       this.startNextTurn(causationId);
+      this.releaseHeld();
     }
   }
 

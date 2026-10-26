@@ -108,6 +108,8 @@ export class AutodartsLocalAdapter implements BoardSource {
   private buffered: Snapshot[] = [];
   private upstreamVersion: string | undefined;
   private lastEmittedConn: string | undefined;
+  /** Groups every fact of the resync in progress, from `resyncing` to `online` (§7.2). */
+  private resyncCorrelation: string | undefined;
 
   private connectTimer: TimerHandle | null = null;
   private openTimer: TimerHandle | null = null;
@@ -233,6 +235,7 @@ export class AutodartsLocalAdapter implements BoardSource {
           if (gen !== this.gen) return;
           this.clear('openTimer');
           this.phase = 'resyncing';
+          this.resyncCorrelation = this.o.ids();
           this.emitConnection('resyncing');
           this.fetchResyncSnapshot(gen);
         },
@@ -281,7 +284,7 @@ export class AutodartsLocalAdapter implements BoardSource {
   private finishResync(snapshot: Snapshot | null): void {
     const queue = snapshot ? [...this.buffered, snapshot] : [...this.buffered];
     this.buffered = [];
-    const correlationId = this.o.ids();
+    const correlationId = this.resyncCorrelation ?? this.o.ids();
     let needsConfirm = false;
     queue.forEach((snap, i) => {
       if (i === 0) this.applySnapshot(snap, 'resync', correlationId);
@@ -292,6 +295,7 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.refusedInARow = 0;
     this.pollFailures = 0;
     this.emitConnection('online');
+    this.resyncCorrelation = undefined;
     this.attempt = 0;
     this.armLiveness();
     if (needsConfirm) this.requestPoll();
@@ -335,6 +339,7 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.pollAgain = false;
     this.confirmRounds = 0;
     this.buffered = [];
+    this.resyncCorrelation = undefined;
     const s = this.socket;
     this.socket = null;
     if (s) {
@@ -495,7 +500,7 @@ export class AutodartsLocalAdapter implements BoardSource {
     return s;
   }
 
-  private emit(body: FactBody, correlationId?: string): void {
+  private emit(body: FactBody, correlationId = this.resyncCorrelation): void {
     const draft = { ...body, source: this.source(), occurredAt: this.o.clock() } as BoardFactDraft;
     if (correlationId !== undefined) draft.correlationId = correlationId;
     this.facts.emit(draft);

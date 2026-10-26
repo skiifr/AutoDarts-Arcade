@@ -53,6 +53,55 @@ describe('autodarts-local adapter: a normal visit', () => {
     expect(brief(rig.facts)).toEqual(['detect 0:S1', 'detect 1:S7', 'withdraw']);
   });
 
+  it('a manual reset: VisitReset first, then a DartWithdrawn for each of the visit’s darts', async () => {
+    const rig = await onlineRig();
+    rig.board.throwDart({ segment: 'S5' });
+    rig.board.throwDart({ segment: 'T20' });
+    await rig.sched.advance(50);
+    rig.board.manualReset();
+    await rig.sched.advance(50);
+    expect(brief(rig.facts)).toEqual(['detect 0:S5', 'detect 1:T20', 'reset', 'withdraw', 'withdraw']);
+    const [reset] = ofType(rig.facts, 'VisitReset');
+    const darts = ofType(rig.facts, 'DartDetected');
+    expect(reset?.payload.visitKey).toBe(darts[0]?.payload.visitKey);
+    expect(ofType(rig.facts, 'DartWithdrawn').map((f) => f.payload.throwId)).toEqual(darts.map((f) => f.payload.throwId));
+  });
+
+  it('gives every fact of one resync, from resyncing to online, one correlationId', async () => {
+    const rig = await onlineRig();
+    rig.board.throwDart({ segment: 'S5' });
+    await rig.sched.advance(50);
+    rig.transport.setReachable(false);
+    await rig.sched.advance(6000);
+    rig.board.throwDart({ segment: 'T20' });
+    rig.transport.inject('{"type":"state","data":{"throws":"many"}}'); // nobody listening: dropped
+    rig.transport.setReachable(true);
+    await rig.sched.advance(2000);
+    const lastState = (state: string): number =>
+      rig.facts.reduce((at, f, i) => (f.type === 'SourceConnectionChanged' && f.payload.state === state ? i : at), -1);
+    const from = lastState('resyncing');
+    const to = lastState('online');
+    const resync = rig.facts.slice(from, to + 1);
+    expect(resync.map((f) => f.type)).toEqual(['SourceConnectionChanged', 'DartDetected', 'SourceConnectionChanged']);
+    expect(ofType(resync, 'DartDetected')[0]?.payload.recovered).toBe(true);
+    const ids = new Set(resync.map((f) => f.correlationId));
+    expect(ids.size).toBe(1);
+    expect([...ids][0]).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    // Facts outside a resync are not grouped.
+    expect(rig.facts.slice(0, from).filter((f) => f.type === 'DartDetected').every((f) => f.correlationId === undefined)).toBe(true);
+    // The first connection's resync is grouped too.
+    const first = rig.facts.slice(0, rig.facts.findIndex((f) => f.type === 'SourceConnectionChanged' && f.payload.state === 'online') + 1);
+    expect(first.map((f) => (f.type === 'SourceConnectionChanged' ? f.payload.state : f.type))).toEqual([
+      'connecting',
+      'resyncing',
+      'BoardStatusChanged',
+      'online',
+    ]);
+    expect(first[0]?.correlationId).toBeUndefined();
+    expect(first[1]?.correlationId).toBeDefined();
+    expect(new Set(first.slice(1).map((f) => f.correlationId)).size).toBe(1);
+  });
+
   it('reports a re-read dart as DartUpdated', async () => {
     const rig = await onlineRig();
     rig.board.throwDart({ segment: 'T20' });

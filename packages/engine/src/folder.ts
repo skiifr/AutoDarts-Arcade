@@ -134,6 +134,13 @@ export class SessionFolder {
   private readonly boardDarts = new Map<string, BoardDart>();
   private readonly visits = new Map<string, VisitRecord>();
   private readonly held = new Set<string>();
+  /**
+   * Visits that turned up during a review pause, in the order they did: a held dart, or a
+   * visit end for a visit no turn owns (an inferred takeout of a visit with no darts).
+   */
+  private readonly heldOrder: string[] = [];
+  /** eventIds of visit ends that have already ended a turn. */
+  private readonly consumedEnds = new Set<string>();
   private readonly takeoutFacts = new Map<string, { kind: 'takeout' | 'reset'; inferred: boolean }>();
   connection: ConnectionState = 'unknown';
   boardStatus: BoardStatus | 'unknown' = 'unknown';
@@ -181,6 +188,8 @@ export class SessionFolder {
     for (const [id, bd] of this.boardDarts) c.boardDarts.set(id, { ...bd });
     for (const [key, v] of this.visits) c.visits.set(key, { ...v, throwIds: [...v.throwIds], ended: v.ended && { ...v.ended } });
     for (const id of this.held) c.held.add(id);
+    c.heldOrder.push(...this.heldOrder);
+    for (const id of this.consumedEnds) c.consumedEnds.add(id);
     for (const [id, fact] of this.takeoutFacts) c.takeoutFacts.set(id, fact);
     c.connection = this.connection;
     c.boardStatus = this.boardStatus;
@@ -242,16 +251,25 @@ export class SessionFolder {
     return n;
   }
 
-  /** Held board darts grouped by visit, in the order the visits began. */
+  /**
+   * What a review pause is holding for the turns after it, in the order it happened: each
+   * visit with held board darts (in board order), and each visit with no darts that the board
+   * may have ended offline (`TakeoutFinished{inferred}` with nothing held: a whole visit may
+   * have come and gone). Empty while the game is over: there is no next turn to hold for.
+   */
   heldVisits(): { visit: VisitRecord; darts: BoardDart[] }[] {
-    const groups = new Map<string, BoardDart[]>();
-    for (const id of this.held) {
-      const bd = this.boardDarts.get(id)!;
-      const list = groups.get(bd.visitKey);
-      if (list) list.push(bd);
-      else groups.set(bd.visitKey, [bd]);
+    if (this.heldOrder.length === 0 || this.isFinished()) return [];
+    const out: { visit: VisitRecord; darts: BoardDart[] }[] = [];
+    for (const key of this.heldOrder) {
+      const visit = this.visits.get(key)!;
+      const darts: BoardDart[] = [];
+      for (const id of visit.throwIds) if (this.held.has(id)) darts.push(this.boardDarts.get(id)!);
+      const end = visit.ended;
+      const pendingEnd =
+        visit.owner === null && end !== null && end.kind === 'takeout' && end.inferred && !this.consumedEnds.has(end.eventId);
+      if (darts.length > 0 || pendingEnd) out.push({ visit, darts });
     }
-    return [...groups].map(([key, darts]) => ({ visit: this.visits.get(key)!, darts }));
+    return out;
   }
 
   unreviewedTurns(): number[] {
@@ -385,6 +403,7 @@ export class SessionFolder {
         const inferred = e.type === 'TakeoutFinished' && e.payload.inferred === true;
         visit.ended ??= { kind, inferred, eventId: e.eventId, seq: e.seq };
         this.takeoutFacts.set(e.eventId, { kind, inferred });
+        if (this.inReviewHold() && visit.owner === null) this.holdVisit(visit.visitKey);
         return;
       }
       case 'SourceConnectionChanged':
@@ -508,6 +527,7 @@ export class SessionFolder {
         this.started.payload.houseRules.missingDartsAreMisses,
     };
     if (p.needsReview) this.unreviewed.add(turn.turnIndex);
+    if (e.causationId !== undefined && cause !== undefined) this.consumedEnds.add(e.causationId);
     this.active = null;
     this.touch(turn.turnIndex);
   }
@@ -516,7 +536,7 @@ export class SessionFolder {
     const p = e.payload;
     if (this.boardDarts.has(p.throwId)) return; // a re-delivered fact; the first sighting stands
     const visit = this.visitFor(p.visitKey);
-    const phase = this.turns.length === 0 ? 'baseline' : this.active ? 'turn' : this.paused.includes('review') ? 'review' : 'idle';
+    const phase = this.turns.length === 0 ? 'baseline' : this.active ? 'turn' : this.inReviewHold() ? 'review' : 'idle';
     const bd: BoardDart = {
       throwId: p.throwId,
       visitKey: p.visitKey,
@@ -534,7 +554,19 @@ export class SessionFolder {
     this.boardDarts.set(bd.throwId, bd);
     visit.throwIds.push(bd.throwId);
     if (phase === 'baseline') visit.hasBaseline = true;
-    if (phase === 'review') this.held.add(bd.throwId);
+    if (phase === 'review') {
+      this.held.add(bd.throwId);
+      this.holdVisit(bd.visitKey);
+    }
+  }
+
+  /** Between turns, waiting for a person to confirm a turn that ended on an inferred takeout. */
+  private inReviewHold(): boolean {
+    return this.turns.length > 0 && this.active === null && this.paused.includes('review');
+  }
+
+  private holdVisit(visitKey: string): void {
+    if (!this.heldOrder.includes(visitKey)) this.heldOrder.push(visitKey);
   }
 
   private visitFor(visitKey: string): VisitRecord {
@@ -572,10 +604,14 @@ export class SessionFolder {
     const finished = pass.finished;
     const standings = finished?.standings ?? info.game.result(pass.state);
     const unreviewed = this.unreviewedTurns();
-    const heldDarts: HeldDartView[] = [...this.held].map((id) => {
-      const bd = this.boardDarts.get(id)!;
-      return { throwId: bd.throwId, segment: bd.segment, visitKey: bd.visitKey, recovered: bd.recovered };
-    });
+    // Once the game is over nothing is held for a next turn; a correction that reopens the game
+    // releases them again (Decider.afterChange).
+    const heldDarts: HeldDartView[] =
+      finished !== null
+        ? []
+        : this.heldVisits().flatMap(({ darts }) =>
+            darts.map((bd) => ({ throwId: bd.throwId, segment: bd.segment, visitKey: bd.visitKey, recovered: bd.recovered })),
+          );
     return {
       sessionId: info.sessionId,
       lastSeq: this.lastSeq,
