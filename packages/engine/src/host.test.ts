@@ -297,6 +297,17 @@ describe('SessionHost: commands', () => {
     expect(s.currentPlayerId).toBe(B.playerId);
   });
 
+  it('logs the validated copy of a board fact, without keys the schema does not know', async () => {
+    const rig = await started();
+    const f = rig.board.dart(S1);
+    const noisy = { ...f, debug: 'x', payload: { ...f.payload, rawFrame: { a: 1 } } } as unknown as BoardFactDraft;
+    const r = await rig.host.ingest(noisy);
+    expect(types(r)).toEqual(['DartDetected', 'DartThrown']);
+    const logged = rig.host.getLog().find((e) => e.type === 'DartDetected')!;
+    expect(Object.keys(logged.payload).sort()).toEqual(['indexInVisit', 'segment', 'throwId', 'visitKey']);
+    expect('debug' in logged).toBe(false);
+  });
+
   it('rejects a malformed board fact without touching the log', async () => {
     const rig = await started();
     const bad = { ...rig.board.dart(S1), payload: { ...rig.board.dart(S1).payload, segment: { ...S1, label: 'T20' } } };

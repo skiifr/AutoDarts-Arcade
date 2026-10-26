@@ -217,8 +217,18 @@ export class SessionHost {
     if (!check.success || !isBoardFact(check.data)) {
       return { status: 'rejected', reason: 'invalid', message: check.error?.message ?? 'not a board fact' };
     }
+    // Log the validated copy: zod has dropped anything the schema does not know.
+    const { type, payload, source, occurredAt, causationId, correlationId } = check.data;
+    const clean = {
+      type,
+      payload,
+      source,
+      occurredAt,
+      ...(causationId !== undefined ? { causationId } : {}),
+      ...(correlationId !== undefined ? { correlationId } : {}),
+    } as BoardFactDraft;
     const result = await this.commit(folder, (batch, decider) => {
-      const appended = batch.emit(fact);
+      const appended = batch.emit(clean);
       decider.deriveFromFact(appended);
     });
     if (result.status === 'applied') this.tracker.observe(fact);
