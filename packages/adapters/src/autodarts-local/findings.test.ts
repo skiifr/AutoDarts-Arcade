@@ -82,6 +82,37 @@ describe('finding 1: a takeout first seen on resync, with a dart already pulled'
   });
 });
 
+describe('finding 2: the board’s changes land on the dart it changed', () => {
+  it('phantom S20, then a real T20; the board withdraws the phantom: the phantom’s id is withdrawn', async () => {
+    const rig = await online();
+    rig.board.phantom('S20');
+    await rig.sched.advance(300);
+    rig.board.throwDart({ segment: 'T20' });
+    await rig.sched.advance(300);
+    rig.board.withdraw(0);
+    await rig.sched.advance(300);
+    const [phantom, real] = ofType(rig.facts, 'DartDetected').map((f) => f.payload.throwId);
+    expect(ofType(rig.facts, 'DartWithdrawn').map((f) => f.payload.throwId)).toEqual([phantom]);
+    expect(ofType(rig.facts, 'DartUpdated')).toEqual([]);
+    expect([...liveDarts(rig.facts)]).toEqual([[real, 'T20']]);
+  });
+
+  it('S1, S5; the board withdraws S1, then re-reads S5 as S20: each change hits its own dart', async () => {
+    const rig = await online();
+    rig.board.throwDart({ segment: 'S1' });
+    await rig.sched.advance(300);
+    rig.board.throwDart({ segment: 'S5' });
+    await rig.sched.advance(300);
+    rig.board.withdraw(0);
+    await rig.sched.advance(300);
+    rig.board.changeDetection(0, 'S20');
+    await rig.sched.advance(300);
+    const [s1, s5] = ofType(rig.facts, 'DartDetected').map((f) => f.payload.throwId);
+    expect(ofType(rig.facts, 'DartWithdrawn').map((f) => f.payload.throwId)).toEqual([s1]);
+    expect(ofType(rig.facts, 'DartUpdated').map((f) => [f.payload.throwId, f.payload.previous.label, f.payload.segment.label])).toEqual([[s5, 'S5', 'S20']]);
+  });
+});
+
 describe('finding 4: a takeout called off with the same darts', () => {
   it('throwing(A) → (A,B) → takeout → called off → the board retracts B: B is withdrawn', async () => {
     const rig = await online();

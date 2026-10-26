@@ -49,10 +49,13 @@ describe('§6.2 snapshot diff (live)', () => {
     expect(t.state().known.map((k) => k.segment.label)).toEqual(['T20', 'T20']);
   });
 
-  it('withdrawn first dart: positions shift, logged as updates, nothing re-detected', () => {
+  it('withdrawn first dart: that dart is withdrawn, the other keeps its id, nothing re-detected', () => {
     const t = online();
-    step(t, throwing(A, C));
-    expect(step(t, throwing(C))).toEqual(['update T20->T5', 'withdraw']);
+    const [first, second] = t.apply(throwing(A, C), 'live');
+    const facts = t.apply(throwing(C), 'live');
+    expect(show(facts)).toEqual(['withdraw']);
+    expect(facts[0]?.type === 'DartWithdrawn' && facts[0].payload.throwId).toBe(first?.type === 'DartDetected' && first.payload.throwId);
+    expect(t.state().known.map((k) => [k.throwId, k.segment.label])).toEqual([[second?.type === 'DartDetected' && second.payload.throwId, 'T5']]);
   });
 
   it('takeout begins on event "Takeout started": TakeoutStarted', () => {
@@ -528,5 +531,101 @@ describe('a takeout first seen with darts already pulled: they were removed, not
     const t = online();
     step(t, throwing(X, Y));
     expect(step(t, takeoutStarted(E), 'resync', 3000)).toEqual(['takeout-end inferred', 'detect 0:S12 recovered', 'takeout-start']);
+  });
+});
+
+describe('each dart keeps its id when the board withdraws another (finding 2)', () => {
+  // Identity by position re-mapped every later dart after a withdrawal, so the board's changes
+  // landed on the wrong physical dart: the host voided the real T20 when the board withdrew a
+  // phantom the player had already voided, and a dart took its neighbour's reading.
+  const P = d('S20', 0.0452, 0.8317); // a phantom
+  const R = d('T20', 0.0303, 0.6166); // the real dart
+  const S1 = d('S1', 0.2391, 0.7313);
+  const S5 = d('S5', -0.2402, 0.7395);
+
+  /** Facts of one snapshot, each dart named by the order it was first detected in (#1, #2, …). */
+  function named(t: VisitTracker, names: Map<string, string>, s: Snapshot, mode: ApplyMode = 'live', away?: number): string[] {
+    const review = (p: { pendingReview?: true }): string => (p.pendingReview ? ' review' : '');
+    return t.apply(s, mode, away).map((f) => {
+      switch (f.type) {
+        case 'DartDetected':
+          names.set(f.payload.throwId, `#${names.size + 1}`);
+          return `detect ${names.get(f.payload.throwId)} ${f.payload.segment.label}${f.payload.recovered ? ' recovered' : ''}${review(f.payload)}`;
+        case 'DartUpdated':
+          return `update ${names.get(f.payload.throwId)} ${f.payload.previous.label}->${f.payload.segment.label}${review(f.payload)}`;
+        case 'DartWithdrawn':
+          return `withdraw ${names.get(f.payload.throwId)}`;
+        default:
+          return show([f])[0] as string;
+      }
+    });
+  }
+
+  function play(...snaps: Snapshot[]): { t: VisitTracker; names: Map<string, string>; last: string[] } {
+    const t = online();
+    const names = new Map<string, string>();
+    let last: string[] = [];
+    for (const s of snaps) last = named(t, names, s);
+    return { t, names, last };
+  }
+
+  it('phantom, then a real dart; the board withdraws the phantom: the phantom is withdrawn', () => {
+    const { t, names, last } = play(throwing(P), throwing(P, R), throwing(R));
+    expect(last).toEqual(['withdraw #1']);
+    expect(t.state().known.map((k) => `${names.get(k.throwId)} ${k.segment.label}`)).toEqual(['#2 T20']);
+  });
+
+  it('S1, S5; the board withdraws S1: S5 keeps its id and its reading', () => {
+    const { t, names, last } = play(throwing(S1), throwing(S1, S5), throwing(S5));
+    expect(last).toEqual(['withdraw #1']);
+    // The next dart takes the free index; nothing else moves.
+    expect(named(t, names, throwing(S5, E))).toEqual(['detect #3 S12']);
+    expect(t.state().known.map((k) => `${names.get(k.throwId)}@${k.indexInVisit}`)).toEqual(['#2@1', '#3@0']);
+  });
+
+  it('a withdrawal and a re-read in one snapshot each hit their own dart', () => {
+    const { last } = play(throwing(A, B, C), throwing(B, C2));
+    expect(last).toEqual(['withdraw #1', 'update #3 T5->S5']);
+  });
+
+  it('a non-last dart withdrawn while we were away: withdrawn after the resync', () => {
+    const t = online();
+    const names = new Map<string, string>();
+    named(t, names, throwing(A, B, C));
+    expect(named(t, names, throwing(B, C), 'resync', 3000)).toEqual(['withdraw #1']);
+  });
+
+  it('rebuildVisitState keeps each dart where it is', () => {
+    const t = online();
+    const facts: TrackerFact[] = [];
+    for (const s of [throwing(S1), throwing(S1, S5), throwing(S5), throwing(S5, E)]) facts.push(...t.apply(s, 'live'));
+    const restored = rebuildVisitState(facts, () => '01JBX00000000000000000000V');
+    expect(restored.known).toEqual(t.state().known);
+    const resumed = tracker(restored);
+    expect(show(resumed.apply(throwing(E), 'live'))).toEqual(show(t.apply(throwing(E), 'live')));
+  });
+
+  describe('without coordinates the board’s choice cannot be checked: the darts left are flagged', () => {
+    const s1 = d('S1');
+    const s5 = d('S5');
+    const s3 = d('S3');
+    const s20 = d('S20');
+    it.each([
+      ['the first of two withdrawn', [s1, s5], [s5], ['withdraw #1', 'update #2 S5->S5 review']],
+      ['one of two alike withdrawn', [s5, s5], [s5], ['withdraw #2', 'update #1 S5->S5 review']],
+      ['the last withdrawn: plain', [s1, s5], [s1], ['withdraw #2']],
+      ['a removal and a re-read at once', [s1, s5, s3], [s1, s20], ['withdraw #3', 'update #1 S1->S1 review', 'update #2 S5->S20 review']],
+      ['two re-reads at once', [s1, s5], [s20, s3], ['update #1 S1->S20 review', 'update #2 S5->S3 review']],
+      ['one re-read: plain', [s1, s5], [s1, s20], ['update #2 S5->S20']],
+    ] as const)('%s', (_label, before, after, facts) => {
+      const { last } = play(throwing(...before), throwing(...after));
+      expect(last).toEqual(facts);
+    });
+
+    it('a dart flagged so stays flagged', () => {
+      const { t, names } = play(throwing(s5, s5), throwing(s5));
+      expect(named(t, names, throwing(s20))).toEqual(['update #1 S5->S20 review']);
+      expect(named(t, names, throwing(s20))).toEqual([]);
+    });
   });
 });

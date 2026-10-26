@@ -69,9 +69,14 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
         const dart: KnownDart = { throwId: p.throwId, segment: p.segment, indexInVisit: p.indexInVisit };
         if (p.coords) dart.coords = p.coords;
         // Flagged where the last visit's dart was: the tracker's suspected ghost, which stays flagged.
+        // (Ghosts are a new visit's leading darts, whose index is their place on the board.)
         const prev = recent[0]?.[p.indexInVisit];
         if (p.pendingReview && dart.coords && prev?.coords && relate(prev, dart) === 'same') dart.suspectedGhost = true;
-        known[p.indexInVisit] = dart;
+        // The tracker keeps darts in board order, which is the order they were detected in: the
+        // board appends new darts, and a withdrawal leaves the others in place.
+        const at = known.findIndex((k) => k.throwId === p.throwId);
+        if (at >= 0) known[at] = dart;
+        else known.push(dart);
         break;
       }
       case 'DartUpdated': {
