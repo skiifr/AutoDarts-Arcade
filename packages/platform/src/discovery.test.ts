@@ -2,7 +2,7 @@ import { ULID_PATTERN } from '@arcade/event-schema';
 import type { Transport } from '@arcade/adapters';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BoardAddress } from './address';
-import { BoardDiscovery, LastKnownAddress, checkBoard, checkManualAddress, probeSubnet, type KeyValueStorage } from './discovery';
+import { BoardDiscovery, ConnectAttempts, LastKnownAddress, checkBoard, checkManualAddress, probeSubnet, type ConnectLink, type KeyValueStorage } from './discovery';
 import { createBoardTransport, type FetchLike, type ResponseLike } from './transport';
 import { connectBoard } from './board';
 import { systemClock, systemIds, systemScheduler } from './runtime';
@@ -181,6 +181,120 @@ describe('subnet probe (opt-in)', () => {
     await p;
     expect(net.asked.length).toBeLessThan(10);
     await expect(probeSubnet({ near: '8.8.8.8' })).rejects.toThrow(/not a private/);
+  });
+});
+
+/**
+ * A board link like the app's: one link at a time, `whenOnline` settles `online` when the
+ * test says so, or `closed` when the link is closed or replaced first.
+ */
+function fakeLink() {
+  const log: string[] = [];
+  let current: { address: BoardAddress; settle: (r: 'online' | 'closed') => void; done: Promise<'online' | 'closed'> } | null = null;
+  const link: ConnectLink = {
+    open(address) {
+      current?.settle('closed');
+      let settle: (r: 'online' | 'closed') => void = () => {};
+      const done = new Promise<'online' | 'closed'>((r) => {
+        settle = r;
+      });
+      current = { address, settle, done };
+      log.push(`open ${address.host}`);
+    },
+    close() {
+      if (!current) return;
+      current.settle('closed');
+      log.push(`close ${current.address.host}`);
+      current = null;
+    },
+    whenOnline: () => current?.done ?? Promise.resolve('closed'),
+  };
+  return {
+    link,
+    log,
+    /** The board answers, even if the attempt was given up (a late success). */
+    goOnline: () => current?.settle('online'),
+    get open() {
+      return current?.address.host ?? null;
+    },
+  };
+}
+
+const A = { host: '192.168.1.40', port: 3180 };
+const B = { host: '192.168.1.41', port: 3180 };
+
+describe('W0 connect attempts', () => {
+  it('Play demo (cancel) while linking closes the link, and a late success is ignored', async () => {
+    const net = fakeLink();
+    const attempts = new ConnectAttempts(net.link);
+    const a = attempts.begin();
+    const linked = a.link(A);
+    expect(net.open).toBe('192.168.1.40');
+    attempts.cancel(); // Play demo, leaving W0, or unmounting it
+    expect(net.open).toBeNull();
+    net.goOnline();
+    expect(await linked).toBe(false);
+    expect(a.stale).toBe(true);
+    expect(attempts.pending).toBe(false);
+    expect(net.log).toEqual(['open 192.168.1.40', 'close 192.168.1.40']);
+  });
+
+  it('a late online that beats the close still counts for nothing once cancelled', async () => {
+    const net = fakeLink();
+    const attempts = new ConnectAttempts(net.link);
+    const a = attempts.begin();
+    const linked = a.link(A);
+    net.goOnline(); // settled, but the attempt only hears of it after the cancel
+    attempts.cancel();
+    expect(await linked).toBe(false);
+    expect(net.open).toBeNull();
+  });
+
+  it('cancelled while still checking: the link is never opened', async () => {
+    const net = fakeLink();
+    const attempts = new ConnectAttempts(net.link);
+    const a = attempts.begin();
+    attempts.cancel();
+    expect(a.stale).toBe(true);
+    expect(await a.link(A)).toBe(false);
+    expect(net.log).toEqual([]);
+  });
+
+  it('a newer attempt supersedes the older one, whose late success changes nothing', async () => {
+    const net = fakeLink();
+    const attempts = new ConnectAttempts(net.link);
+    const first = attempts.begin();
+    const firstLinked = first.link(A);
+    const second = attempts.begin();
+    expect(first.stale).toBe(true);
+    expect(net.open).toBeNull();
+    const secondLinked = second.link(B);
+    net.goOnline();
+    expect(await firstLinked).toBe(false);
+    expect(await secondLinked).toBe(true);
+    expect(net.open).toBe('192.168.1.41');
+  });
+
+  it('once online the attempt is done: leaving W0 for the ticker keeps the link', async () => {
+    const net = fakeLink();
+    const attempts = new ConnectAttempts(net.link);
+    const a = attempts.begin();
+    const linked = a.link(A);
+    net.goOnline();
+    expect(await linked).toBe(true);
+    expect(attempts.pending).toBe(false);
+    attempts.cancel(); // W0 loses focus as the ticker opens
+    expect(net.open).toBe('192.168.1.40');
+  });
+
+  it('a link closed by someone else ends the attempt', async () => {
+    const net = fakeLink();
+    const attempts = new ConnectAttempts(net.link);
+    const a = attempts.begin();
+    const linked = a.link(A);
+    net.link.close();
+    expect(await linked).toBe(false);
+    expect(attempts.pending).toBe(false);
   });
 });
 

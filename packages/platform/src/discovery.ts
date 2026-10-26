@@ -177,3 +177,72 @@ export class BoardDiscovery implements Discovery {
     return c ? [c] : [];
   }
 }
+
+/** What W0 needs of the app's board link to connect, and to take a connection back. */
+export interface ConnectLink {
+  open(address: BoardAddress): void;
+  close(): void;
+  /** Settles `online` the first time the link just opened is online, `closed` if it is closed or replaced first. */
+  whenOnline(): Promise<'online' | 'closed'>;
+}
+
+export interface ConnectAttempt {
+  /** True once a newer attempt began or this one was cancelled: stop, and change nothing. */
+  readonly stale: boolean;
+  /**
+   * Opens the link and waits until it is online. True means the attempt succeeded and is
+   * done. False if it was cancelled or superseded first (the link it opened is then closed)
+   * or the link was closed by someone else.
+   */
+  link(address: BoardAddress): Promise<boolean>;
+}
+
+/**
+ * W0's connect attempts, one at a time (§9.4). `begin()` supersedes the attempt before it;
+ * `cancel()` (Cancel, Play demo, leaving or unmounting the screen) abandons the pending one
+ * and closes the link it opened. A late answer of an abandoned attempt changes nothing, so
+ * it can't push the ticker over a demo game. An attempt that got online is done: `cancel()`
+ * then leaves its link alone, since the link now belongs to the screen it led to.
+ */
+export class ConnectAttempts {
+  private readonly boardLink: ConnectLink;
+  private current: { opened: boolean } | null = null;
+
+  constructor(link: ConnectLink) {
+    this.boardLink = link;
+  }
+
+  /** Whether an attempt is under way (checking or linking). */
+  get pending(): boolean {
+    return this.current !== null;
+  }
+
+  begin(): ConnectAttempt {
+    this.cancel();
+    const me = { opened: false };
+    this.current = me;
+    const stale = (): boolean => this.current !== me;
+    return {
+      get stale() {
+        return stale();
+      },
+      link: async (address) => {
+        if (stale()) return false;
+        me.opened = true;
+        this.boardLink.open(address);
+        const result = await this.boardLink.whenOnline();
+        if (stale()) return false;
+        this.current = null;
+        return result === 'online';
+      },
+    };
+  }
+
+  /** Abandons the pending attempt, if any, and closes the link it opened. */
+  cancel(): void {
+    const me = this.current;
+    if (!me) return;
+    this.current = null;
+    if (me.opened) this.boardLink.close();
+  }
+}
