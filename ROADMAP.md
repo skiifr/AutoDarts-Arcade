@@ -65,6 +65,11 @@ flowchart LR
 
 **Goal:** replace every 🔬 in the architecture with facts from *your* board and devices, and stand up the skeleton everything else builds on.
 
+**Status (2026-10-26):**
+- **Done:** items 4–6. That covers the monorepo with CI, `event-schema` v1 with tests, and the app skeleton on Expo SDK 56 + `react-native-tvos` ([ADR-003](docs/adr/0003-client-stack-versions.md)).
+- **Done early:** the app skeleton also carries the **visual shell** for all of W0–W5, driven by demo darts. This pulls P4's layout work forward; P4 still owns wiring the shell to the engine, profiles and the acceptance criteria.
+- **Open:** items 1–3 (board probe, fixtures, Pi baseline: these need your network), item 7 (installing on your devices), and item 8.
+
 **Scope**
 1. **Board probe** (`apps/devtools/board-probe`, runs on a laptop, read-only, nothing installed on the Pi):
    - version detection;

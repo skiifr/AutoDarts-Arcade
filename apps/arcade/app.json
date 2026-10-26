@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "AutoDarts Arcade",
+    "slug": "autodarts-arcade",
+    "version": "0.1.0",
+    "orientation": "default",
+    "scheme": "autodartsarcade",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#090C17",
+    "ios": {
+      "bundleIdentifier": "io.github.skiifr.autodartsarcade",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "AutoDarts Arcade reads throws from your dartboard over your home network.",
+        "NSBonjourServices": ["_autodarts-board._tcp"],
+        "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true },
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "io.github.skiifr.autodartsarcade",
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "single",
+      "bundler": "metro",
+      "name": "AutoDarts Arcade",
+      "backgroundColor": "#090C17"
+    },
+    "plugins": [
+      "expo-router",
+      "@react-native-tvos/config-tv",
+      ["expo-build-properties", { "android": { "usesCleartextTraffic": true } }]
+    ],
+    "experiments": {
+      "reactCompiler": true
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "autodarts-arcade",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "packageManager": "yarn@1.22.22",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p packages/event-schema && tsc -p packages/ui-kit && tsc -p apps/arcade",
+    "test": "vitest run",
+    "check": "yarn lint && yarn typecheck && yarn test",
+    "web": "yarn --cwd apps/arcade web",
+    "export:web": "yarn --cwd apps/arcade export:web"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^16.0.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.0",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

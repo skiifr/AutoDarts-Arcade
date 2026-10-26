@@ -1,0 +1,23 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "testflight": {
+      "distribution": "store",
+      "autoIncrement": true
+    },
+    "android-apk": {
+      "distribution": "internal",
+      "android": { "buildType": "apk" }
+    },
+    "firetv-apk": {
+      "extends": "android-apk",
+      "env": { "EXPO_TV": "1" }
+    }
+  },
+  "submit": {
+    "testflight": {}
+  }
+}

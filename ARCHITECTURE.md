@@ -341,7 +341,7 @@ Reanimated's own guidance is no more than ~100 animated components on low-end An
 | Concern | Choice | Status |
 |---|---|---|
 | Language | TypeScript (strict) everywhere | — |
-| Mobile + Fire OS app | Expo (prebuild / dev client, no Expo Go on TV ✅[P13]) + `react-native-tvos`. **Candidate: Expo SDK 56 + `react-native-tvos@0.85-stable`**, which is documented for TV and within 2 minors of Vega's RN 0.83 ✅[P13][P3]. Final pick at the end of Phase 1 | ⚪ |
+| Mobile + Fire OS app | Expo (prebuild / dev client, no Expo Go on TV ✅[P13]) + `react-native-tvos`. **Chosen: Expo SDK 56 + `react-native-tvos@0.85.3-3`** ([ADR-003](docs/adr/0003-client-stack-versions.md)), documented for TV and within 2 minors of Vega's RN 0.83 ✅[P13][P3] | decided |
 | Vega app (backlog) | React Native for Vega (RN 0.83 track), Yarn workspace `apps/vega`, platform files `*.kepler.tsx` ✅[P10]. Not needed for the 4K Max. Shared packages stay Vega-compatible so this remains cheap | ⚪ |
 | Private distribution | Fire TV / Android: APK sideload via `adb` ✅[P26]. iOS / iPadOS: **TestFlight internal testing** (owner has a paid Apple Developer account). Builds expire after 90 days 🟡[P27], so a fresh build is uploaded at least every 90 days | decided |
 | Animation | Reanimated 4 + react-native-svg + Lottie (all targets). Skia v2 as an optional "high" tier on non-Vega | ✅ availability / ⚪ performance |
