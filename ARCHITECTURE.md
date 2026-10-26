@@ -7,7 +7,7 @@
 > - TV target: **Fire TV Stick 4K Max (Fire OS)**.
 > - Distribution with no public store listings: **TestFlight** for iPhone and iPad (paid Apple Developer account); ADB sideload for Fire TV and Android.
 > - Detection host: the current **Raspberry Pi 4 through Phase 5**. An upgrade is considered only if the post-P5 **H1 hardware review** proves it's needed.
-> - See [ROADMAP Q1–Q6](ROADMAP.md#owner-decisions-answered-2026-10-26).
+> - See [ROADMAP owner decisions Q1–Q6, R and S](ROADMAP.md#owner-decisions-answered-2026-10-26).
 > **Companion documents:** [ROADMAP.md](ROADMAP.md) · [RISK-REGISTER.md](RISK-REGISTER.md)
 
 ### Evidence legend
@@ -19,7 +19,7 @@ Every factual claim carries one of these marks. Bracketed IDs refer to [§12 Sou
 | ✅ **Verified** | Read in an official or primary source, or in source code. |
 | 🟡 **Community** | Reported by a third-party project, forum or fixture. Autodarts has not confirmed it. |
 | ⚪ **Assumption** | Our own inference or design target, not yet proven. |
-| 🔬 **Probe** | Can only be confirmed on *your* board or devices. Phase 1 checks these. |
+| 🔬 **Probe** | Can only be confirmed on *your* board or devices. Hardware checkpoint HC1 (ROADMAP) checks these. |
 
 ---
 
@@ -51,7 +51,7 @@ Every factual claim carries one of these marks. Bracketed IDs refer to [§12 Sou
 | D3 | **We integrate through the local board API only, read-only, with no new services.** The app talks to `ws://<board>:3180/api/events` and `GET /api/state` directly. | The cloud API is off-limits: the ToS bans unauthorised third-party software ✅[S3], and Autodarts reportedly issues no third-party client IDs 🟡[C13]. Nothing gets deployed on the Pi, which matches the brief's "do not deploy services". |
 | D4 | **The engine is event-sourced.** Game state is a pure fold over an append-only log, and corrections are new events that trigger a replay. | It makes corrections, crash recovery, reconnection and testing one mechanism instead of four. |
 | D5 | **The host device is the single writer.** | The device showing the game owns the log. Phones send *commands*, which removes multi-device conflicts. |
-| D6 | **Phase 1 opens with a go/no-go hardware probe.** | Whether Autodarts **2.x** still streams throws locally is *disputed* (🟡[C3][C2] say yes, 🟡[C4] says no). Everything else depends on it. |
+| D6 | **A go/no-go hardware probe gates the live board adapter** (G1, in hardware checkpoint HC1). | Whether Autodarts **2.x** still streams throws locally is *disputed* (🟡[C3][C2] say yes, 🟡[C4] says no). Everything else depends on it. |
 | D7 | **Private home use, installed directly.** APK sideload onto the 4K Max and Android; TestFlight on iOS. No store listings. | Owner decision. The GPL, app-name and App Review concerns only apply to public store releases ✅[P21][P24]. Commercial use stays out of scope ✅[S3]. |
 
 ---
@@ -63,7 +63,7 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 | Brief says | Finding | What we changed |
 |---|---|---|
 | "Inspect **ludarts** and **IO-Darts-Agent**" | **"ludarts" does not exist.** We searched GitHub, npm, PyPI, Docker Hub and GitLab. It probably means *lidarts*, an unrelated AGPL web scorer ✅[C7]. **IO-Darts-Agent exists** ✅[C6]. It is cloud-based, ~0 stars, and *PolyForm Noncommercial* licensed (its `module-sdk/` is MIT). | We reviewed both, plus the projects that actually matter: HomeDarts, dartcade, DartLab, ioBroker, Chade's client and darts-caller (§4.5). |
-| "Preserve existing AutoDarts detection" (assumes a stable API) | **Autodarts 2.x shipped in Sept 2026.** It removed the port-3180 Board Manager UI ("not supported from version 2 on") ✅[S1], moved to `autodarts.com`, retired the Keycloak login, and auto-updates ✅[S7]. | The adapter layer is isolated, version-detected and contract-tested. The Phase 1 probe is a gate. |
+| "Preserve existing AutoDarts detection" (assumes a stable API) | **Autodarts 2.x shipped in Sept 2026.** It removed the port-3180 Board Manager UI ("not supported from version 2 on") ✅[S1], moved to `autodarts.com`, retired the Keycloak login, and auto-updates ✅[S7]. | The adapter layer is isolated, version-detected and contract-tested. The HC1 probe is a gate. |
 | "Prioritize … performance on Raspberry Pi 4" | The Pi 4 is already at the edge just running detection ✅[S4]. A community report describes a Pi 4 with 3 cameras freezing at 0 FPS 🟡[C14]. | The Pi 4 does **detection only**. Rendering moves to the display device. |
 | "React/TypeScript frontend" | A web frontend can't be a native app on iPhone, iPad or Fire TV without a wrapper. App Store rule 4.2 rejects repackaged websites ✅[P21]. | **React Native** + TypeScript, which is still React. |
 | "Fire Stick" (implicit) | There are now **two Fire TV operating systems**. Fire OS (Android-based) runs on the 4K Max (both generations), 4K 2nd gen, 4K Plus, HD 2024 and Lite. **Vega OS** (Linux-based, *cannot run Android apps*) runs on the 4K Select 2025, HD 2026 and 4K 3rd gen 2026 ✅[P1]. Amazon says all future sticks will run Vega 🟡[P11]. | **Resolved:** your 4K Max runs Fire OS, so it runs the shared Android build. Vega is a backlog item (§3.3). |
@@ -84,7 +84,7 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 
 ### 3.2 Non-functional requirements (added)
 
-| ID | Requirement | Target ⚪ (Phase 1 refines these) |
+| ID | Requirement | Target ⚪ (HC1 refines these) |
 |---|---|---|
 | NF1 | **Native installable app** on iPhone, iPad, Android and Fire TV | the hard requirement |
 | NF2 | Dart on screen after the board reports it | ≤ 150 ms from WebSocket frame to first visual |
@@ -151,7 +151,7 @@ The ChatGPT brief is a sound starting structure: research first, a modular engin
 
 | Method | Status | Verdict |
 |---|---|---|
-| **Local board API** (`ws://:3180/api/events`, `GET /api/state`) | Undocumented. "Board Manager … not supported from version 2" ✅[S1]. Still used on 2.0.2 by HomeDarts and DartLab 🟡[C2][C3]. ioBroker says 2.x **no longer returns throws** 🟡[C4] | **Chosen.** Gated by the 🔬 Phase 1 probe |
+| **Local board API** (`ws://:3180/api/events`, `GET /api/state`) | Undocumented. "Board Manager … not supported from version 2" ✅[S1]. Still used on 2.0.2 by HomeDarts and DartLab 🟡[C2][C3]. ioBroker says 2.x **no longer returns throws** 🟡[C4] | **Chosen.** Gated by the 🔬 HC1 probe |
 | Cloud WebSocket (`play.ws.autodarts.com`) | Reverse-engineered. Works only by impersonating the first-party `autodarts-play` client with a password login 🟡[C6][C4] | **Rejected:** violates the spirit of ToS §3.2(5) ✅[S3], needs internet, and no third-party client IDs exist 🟡[C13] |
 | Browser extensions / DOM hooks | Hooks the web app's socket in a desktop browser 🟡[C9] | Not applicable to native apps |
 | darts-caller relay (`:8079`) | Depends on darts-caller's cloud login 🟡[C8] | Rejected, same reasons as cloud |
@@ -368,7 +368,7 @@ autodarts-arcade/
 │  ├─ platform/          ports: Transport, LogStore, AudioPort, Discovery, KeepAwake (+ impls)
 │  ├─ ui-kit/            focus-aware RN components, theme, dartboard picker, quality tiers
 │  └─ effects/           GameEffect → animation/sound mapping, effect queue
-└─ fixtures/             recorded board sessions from YOUR board (Phase 1), golden logs
+└─ fixtures/             recorded board sessions from YOUR board (HC1), golden logs
 ```
 
 **Dependency rule** (enforced by lint): `engine`, `games`, `adapters` and `event-schema` import nothing from React, React Native or `platform`. They run identically in the app, in Node tests and in the CLI.
@@ -748,7 +748,7 @@ The Pi 4 stays until after Phase 5 (§4.6), so the app quietly collects the evid
 
 Bounce-outs are kept separate, because no hardware can detect them.
 
-**Not readable through the API:** thermal throttling. The owner runs `vcgencmd get_throttled` on the Pi at the P1 baseline and again at H1. This is read-only.
+**Not readable through the API:** thermal throttling. The owner runs `vcgencmd get_throttled` on the Pi at the HC1 baseline and again at H1. This is read-only.
 
 **Storage and privacy:** all data stays on-device. W1's Settings shows a per-session summary, and a share-sheet export provides the H1 report input.
 
@@ -908,7 +908,7 @@ Game names are original placeholders.
 | Capability or fact | Status |
 |---|---|
 | Autodarts 2.x removed the `:3180` Board Manager UI; local API undocumented | ✅[S1] |
-| Local `ws://:3180/api/events` still streams throws on 2.x | 🟡 disputed ([C2][C3] yes, [C4] no) → **🔬 Phase 1 gate** |
+| Local `ws://:3180/api/events` still streams throws on 2.x | 🟡 disputed ([C2][C3] yes, [C4] no) → **🔬 HC1 gate (G1)** |
 | Local API needs no auth | 🟡[C2][C3] → 🔬 |
 | Frame field names, enums, miss shapes, coords convention | 🟡[C1][C2][C3] → 🔬 recorded fixtures |
 | Board withdraws or updates darts in place | 🟡[C2] → 🔬 |
@@ -916,10 +916,10 @@ Game names are original placeholders.
 | mDNS `_autodarts-board._tcp` on 2.x | 🟡[C15] → 🔬 |
 | Board needs the internet at start | ✅[S4] (v1 FAQ) / 🟡 for v2 → 🔬 |
 | Pi 4 marginal for detection; don't render on it | ✅[S4] |
-| Your Pi 4's actual CPU, thermal and FPS headroom | 🔬 P1 baseline → H1 review after P5 |
+| Your Pi 4's actual CPU, thermal and FPS headroom | 🔬 HC1 baseline → H1 review after P5 |
 | ToS bans unauthorised third-party / commercial use | ✅[S3] |
 | Autodarts staff permit this project for private home use | **Owner-attested** (Autodarts Discord); not independently verified |
-| Your TV stick (4K Max) runs Fire OS and accepts ADB sideloading | ✅[P1][P26] → 🔬 install dry run in P1 |
+| Your TV stick (4K Max) runs Fire OS and accepts ADB sideloading | ✅[P1][P26] → 🔬 install dry run in HC1 |
 | iOS private install via TestFlight on the owner's paid Apple Developer account | decided (owner); 90-day build lifetime 🟡[P27] |
 | No official third-party API or client IDs | ✅ (none published) / 🟡[C13] (Autodarts' reply) |
 | Fire TV models and their OS (Fire OS vs Vega) | ✅[P1] |

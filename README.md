@@ -2,14 +2,14 @@
 
 An arcade-style party-game frontend for an existing camera-scored steel-tip dartboard. It ships as a native app for **iPhone, iPad, Android and Amazon Fire TV**, and reads darts from the board over your home network without modifying the detection software.
 
-> **Status: Phase 1 in progress.** The app shell runs on demo darts; the live board connection is next.
+> **Status: Phase 2 and 3 in progress.** The app shell runs on demo darts while the live board connection (Phase 2) and the game engine (Phase 3) are built. Hardware checkpoint HC1 (board probe, fixtures, Pi baseline, device installs) waits until the board and the Pi are reachable.
 > **Scope:** private home use. Target devices: iPhone, iPad, Android and a Fire TV Stick 4K Max, all installed directly with no store listings.
 > This is an independent community project. It is not affiliated with or endorsed by Autodarts GmbH, Winmau or BattleUp. "AutoDarts Arcade" is the name for private home use, and would be revisited only if the app were ever published.
 
 | Document | What's in it |
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Research findings (Autodarts 2.x, licensing, community projects, Pi 4, Fire TV / Vega), system design, event schema, game engine, wireframes, and the verified-vs-assumed ledger |
-| [ROADMAP.md](ROADMAP.md) | Owner decisions Q1–Q6, six implementation phases with gates, acceptance criteria, and the testing strategy |
+| [ROADMAP.md](ROADMAP.md) | Owner decisions (Q1–Q6, R, S), six implementation phases and hardware checkpoint HC1 with their gates, acceptance criteria, and the testing strategy |
 | [RISK-REGISTER.md](RISK-REGISTER.md) | 27 scored technical, legal and platform risks with mitigations |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to run the checks, the package dependency rule, the code-reuse rule and commit conventions |
 
