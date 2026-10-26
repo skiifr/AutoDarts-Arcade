@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    projects: ['packages/*'],
+    projects: ['packages/*', 'apps/devtools/fake-board', 'apps/devtools/fault-proxy'],
     coverage: {
       provider: 'v8',
       include: ['packages/games/src/**/*.ts'],

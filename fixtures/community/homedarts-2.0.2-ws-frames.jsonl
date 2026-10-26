@@ -1,0 +1,14 @@
+{"type":"state","data":{"connected":true,"running":true,"status":"Throw","event":"Started","numThrows":0,"throws":[]}}
+{"type":"cam_state","data":{"isRunning":true,"isOpened":true}}
+{"type":"motion_state","data":{"isWaiting":true,"isStable":true,"isDart":false,"isHand":false,"isTakeoutPartial":false,"isTakeoutFull":false}}
+{"type":"state","data":{"connected":true,"running":true,"status":"Throw","event":"Throw detected","numThrows":1,"throws":[{"segment":{"name":"T20","number":20,"bed":"Triple","multiplier":3},"coords":{"x":0.0021,"y":0.6138}}]}}
+{"type":"stats","data":{"fps":12.5}}
+{"type":"cam_stats","data":{"id":0,"fps":29.9}}
+{"type":"state","data":{"connected":true,"running":true,"status":"Throw","event":"Throw detected","numThrows":2,"throws":[{"segment":{"name":"T20","number":20,"bed":"Triple","multiplier":3},"coords":{"x":0.0021,"y":0.6138}},{"segment":{"name":"S20","number":20,"bed":"SingleOuter","multiplier":1},"coords":{"x":-0.0349,"y":0.7854}}]}}
+{"type":"state","data":{"connected":true,"running":true,"status":"Throw","event":"Throw detected","numThrows":3,"throws":[{"segment":{"name":"T20","number":20,"bed":"Triple","multiplier":3},"coords":{"x":0.0021,"y":0.6138}},{"segment":{"name":"S20","number":20,"bed":"SingleOuter","multiplier":1},"coords":{"x":-0.0349,"y":0.7854}},{"segment":{"name":"Bull","number":25,"bed":"Double","multiplier":2},"coords":{"x":0.0081,"y":-0.0215}}]}}
+{"type":"state","data":{"connected":true,"running":true,"status":"Takeout in progress","event":"Takeout started","numThrows":3,"throws":[{"segment":{"name":"T20","number":20,"bed":"Triple","multiplier":3},"coords":{"x":0.0021,"y":0.6138}},{"segment":{"name":"S20","number":20,"bed":"SingleOuter","multiplier":1},"coords":{"x":-0.0349,"y":0.7854}},{"segment":{"name":"Bull","number":25,"bed":"Double","multiplier":2},"coords":{"x":0.0081,"y":-0.0215}}]}}
+{"type":"motion_state","data":{"isWaiting":false,"isStable":false,"isDart":false,"isHand":true,"isTakeoutPartial":true,"isTakeoutFull":false}}
+{"type":"state","data":{"connected":true,"running":true,"status":"Throw","event":"Takeout finished","numThrows":0,"throws":[]}}
+{"type":"state","data":{"connected":true,"running":true,"status":"Takeout in progress","event":"Takeout started","numThrows":0,"throws":[]}}
+{"type":"state","data":{"connected":true,"running":true,"status":"Throw","event":"Manual reset","numThrows":0,"throws":[]}}
+{"type":"motion_state","data":{"isWaiting":true,"isStable":true,"isDart":false,"isHand":false,"isTakeoutPartial":false,"isTakeoutFull":false}}

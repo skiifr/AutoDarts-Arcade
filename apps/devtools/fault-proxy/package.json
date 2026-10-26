@@ -1,0 +1,14 @@
+{
+  "name": "@arcade/fault-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Allowlisting HTTP + WebSocket proxy that drops, duplicates, delays, reorders and cuts board frames. Development only.",
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./register.mjs src/main.ts"
+  },
+  "dependencies": {
+    "@arcade/adapters": "*",
+    "ws": "^8.22.0"
+  }
+}

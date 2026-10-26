@@ -1,0 +1,14 @@
+{
+  "name": "@arcade/fake-board",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A simulated Autodarts board (local API on :3180) driven by the adapters' board model. Development only.",
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./register.mjs src/main.ts"
+  },
+  "dependencies": {
+    "@arcade/adapters": "*",
+    "ws": "^8.22.0"
+  }
+}
