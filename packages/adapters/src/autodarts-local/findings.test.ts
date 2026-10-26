@@ -81,3 +81,25 @@ describe('finding 1: a takeout first seen on resync, with a dart already pulled'
     expect(brief(rig.facts)).toEqual(['detect 0:T20', 'detect 1:T19', 'detect 2:T18', 'takeout-start', 'takeout-end']);
   });
 });
+
+describe('finding 4: a takeout called off with the same darts', () => {
+  it('throwing(A) → (A,B) → takeout → called off → the board retracts B: B is withdrawn', async () => {
+    const rig = await online();
+    rig.board.throwDart({ segment: 'S1' });
+    await rig.sched.advance(300);
+    rig.board.phantom('S5');
+    await rig.sched.advance(300);
+    rig.board.startTakeout(); // a hand in front of the cameras
+    await rig.sched.advance(300);
+    expect(rig.board.callOffTakeout()).toBe(true); // it leaves; the darts are still in
+    await rig.sched.advance(300);
+    rig.board.withdraw(1); // the board retracts the phantom
+    await rig.sched.advance(300);
+    rig.board.startTakeout();
+    await rig.sched.advance(500);
+    rig.board.finishTakeout();
+    await rig.sched.advance(500);
+    expect([...liveDarts(rig.facts).values()]).toEqual(['S1']);
+    expect(brief(rig.facts)).toEqual(['detect 0:S1', 'detect 1:S5', 'takeout-start', 'withdraw', 'takeout-start', 'takeout-end']);
+  });
+});

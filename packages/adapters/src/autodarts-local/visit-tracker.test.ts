@@ -177,6 +177,54 @@ describe('§6.2 snapshot diff (live)', () => {
     expect(t.state().inTakeout).toBe(false);
   });
 
+  describe('a takeout called off with the same darts (finding 4)', () => {
+    // A hand in front of the cameras starts a takeout; it leaves with the darts still in, and the
+    // board returns to throwing. If the takeout stayed "on", a later withdrawal was swallowed as
+    // a partial removal and the withdrawn phantom was scored.
+    it.each([
+      ['event "Throw detected"', snap('Throw', 'Throw detected', [A, C])],
+      ['the event still "Takeout started": the status decides', snap('Throw', 'Takeout started', [A, C])],
+    ])('%s: the takeout is off; a later withdrawal is a withdrawal', (_label, calledOff) => {
+      const t = online();
+      step(t, throwing(A));
+      step(t, throwing(A, C));
+      expect(step(t, takeoutStarted(A, C))).toEqual(['takeout-start']);
+      expect(t.classifyFrame(calledOff)).toBe('confirm'); // a late frame must not call it off
+      expect(step(t, calledOff)).toEqual([]);
+      expect(t.state().inTakeout).toBe(false);
+      expect(step(t, throwing(A))).toEqual(['withdraw']); // the board retracts the phantom
+      expect(step(t, takeoutStarted(A))).toEqual(['takeout-start']);
+      expect(step(t, takeoutFinished())).toEqual(['takeout-end']);
+      expect(t.state().recentVisits[0]?.map((k) => k.segment.label)).toEqual(['T20']);
+    });
+
+    it('three darts: the board returns to "Takeout"', () => {
+      const t = online();
+      step(t, throwing(A, B, C));
+      step(t, takeoutStarted(A, B, C));
+      expect(step(t, snap('Takeout', 'Throw detected', [A, B, C]))).toEqual([]);
+      expect(t.state().inTakeout).toBe(false);
+      expect(step(t, throwing(A, B))).toEqual(['withdraw']);
+    });
+
+    it('called off with a dart gone: the board dropped it, so it is withdrawn, and the rest flagged', () => {
+      const t = online();
+      step(t, throwing(A, B, C));
+      step(t, takeoutStarted(A, B, C));
+      expect(step(t, throwing(A, B))).toEqual(['withdraw', 'update T20->T20 review', 'update T20->T20 review']);
+      expect(t.state().inTakeout).toBe(false);
+    });
+
+    it('called off while we were away: the takeout is off after the resync', () => {
+      const t = online();
+      step(t, throwing(A, C));
+      step(t, takeoutStarted(A, C));
+      expect(step(t, throwing(A, C), 'resync', 3000)).toEqual([]);
+      expect(t.state().inTakeout).toBe(false);
+      expect(step(t, throwing(A))).toEqual(['withdraw']);
+    });
+  });
+
   it('darts without coordinates follow the index rule', () => {
     const t = online();
     step(t, throwing(d('T20'), d('S5')));

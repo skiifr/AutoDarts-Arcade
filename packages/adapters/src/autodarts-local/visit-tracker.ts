@@ -144,7 +144,11 @@ export class VisitTracker {
       return 'confirm';
     }
     if (K.length === 0) return this.s.inTakeout || this.ghostCount(T) > 0 ? 'confirm' : 'apply';
-    if (this.s.inTakeout) return T.length <= K.length && this.allKnown(T) ? 'apply' : 'confirm';
+    if (this.s.inTakeout) {
+      // Calling the takeout off on a late frame from before it began would re-arm withdrawals.
+      if (!takeoutBegins(snap)) return 'confirm';
+      return T.length <= K.length && this.allKnown(T) ? 'apply' : 'confirm';
+    }
     const extendsKnown = T.length >= K.length && K.every((k, i) => relate(k, T[i] as NormalizedThrow) === 'same');
     return extendsKnown ? 'apply' : 'confirm';
   }
@@ -321,6 +325,10 @@ export class VisitTracker {
   private diffDuringTakeout(snap: Snapshot, out: TrackerFact[], recovered: boolean): void {
     const K = this.s.known;
     const T = snap.throws;
+    if (!takeoutBegins(snap)) {
+      this.calledOff(out, T, recovered);
+      return;
+    }
     if (T.length <= K.length) {
       if (this.allKnown(T)) return; // partial removal
       this.finishTakeout(out, true);
@@ -328,13 +336,32 @@ export class VisitTracker {
       return;
     }
     if (K.every((k, i) => relate(k, T[i] as NormalizedThrow) === 'same')) {
-      // More darts than before: the board called off the takeout.
-      if (!takeoutBegins(snap)) this.s.inTakeout = false;
       this.detectFrom(out, T, K.length, recovered);
       return;
     }
     this.finishTakeout(out, true);
     this.detectFrom(out, T, 0, true);
+  }
+
+  /**
+   * The board is back to throwing with darts listed: the takeout was called off (a hand in front
+   * of the cameras that left the darts in). The visit goes on, so later withdrawals are
+   * withdrawals again (finding 4). Darts the board no longer lists were dropped from its visit:
+   * withdrawn, as outside a takeout. They may have been pulled before the call-off, so the darts
+   * left are flagged pending review.
+   */
+  private calledOff(out: TrackerFact[], T: readonly NormalizedThrow[], recovered: boolean): void {
+    this.s.inTakeout = false;
+    this.blindTakeout = false;
+    const anchored = recovered ? this.anchoredResync(T) : this.anchoredLive(T);
+    if (!anchored) {
+      this.finishTakeout(out, true);
+      this.detectFrom(out, T, 0, true);
+      return;
+    }
+    const before = this.s.known.length;
+    this.diffSameVisit(out, T, recovered);
+    if (this.s.known.length < before) this.s.known.forEach((_, j) => this.flagInDoubt(out, j));
   }
 
   /**

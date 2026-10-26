@@ -306,6 +306,21 @@ export class BoardModel {
     return det;
   }
 
+  /**
+   * The board calls a takeout off: the hand left with every dart still in. The status returns to
+   * throwing ("Takeout" with 3 darts); nothing new happened, so the event stays "Takeout
+   * started". Only before any dart was pulled; returns whether it happened.
+   */
+  callOffTakeout(): boolean {
+    const startedWith = this.takeoutList;
+    if (this.status !== 'Takeout in progress' || this.stuck || !startedWith || startedWith.length === 0 || startedWith.length !== this.list.length) return false;
+    this.takeoutList = null;
+    this.status = this.list.length >= 3 ? 'Takeout' : 'Throw';
+    this.changed();
+    this.motion(false);
+    return true;
+  }
+
   /** All darts are off the board. */
   finishTakeout(): void {
     if (this.status !== 'Takeout in progress' || this.stuck) return;
