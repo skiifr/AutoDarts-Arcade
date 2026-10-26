@@ -57,13 +57,17 @@ export function reject(reason: RejectReason, message: string): never {
  */
 export class Batch {
   readonly events: ArcadeEvent[] = [];
+  readonly folder: SessionFolder;
+  private readonly sessionId: string;
+  private readonly mintId: () => string;
+  readonly now: string;
 
-  constructor(
-    readonly folder: SessionFolder,
-    private readonly sessionId: string,
-    private readonly mintId: () => string,
-    readonly now: string,
-  ) {}
+  constructor(folder: SessionFolder, sessionId: string, mintId: () => string, now: string) {
+    this.folder = folder;
+    this.sessionId = sessionId;
+    this.mintId = mintId;
+    this.now = now;
+  }
 
   emit<T extends ArcadeEventType>(draft: EventDraft<T>): EventOf<T> {
     const event: Record<string, unknown> = {
@@ -114,10 +118,13 @@ interface EndTurnOptions {
 export class Decider {
   readonly engine: EventSource = { kind: 'engine', adapterVersion: ENGINE_VERSION };
 
-  constructor(
-    private readonly batch: Batch,
-    private readonly uiVersion: string,
-  ) {}
+  private readonly batch: Batch;
+  private readonly uiVersion: string;
+
+  constructor(batch: Batch, uiVersion: string) {
+    this.batch = batch;
+    this.uiVersion = uiVersion;
+  }
 
   private get f(): SessionFolder {
     return this.batch.folder;
