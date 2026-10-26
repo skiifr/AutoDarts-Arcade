@@ -135,7 +135,7 @@ describe('layers', () => {
   it('splits every event type into exactly one layer', () => {
     const overlap = [...BOARD_FACT_TYPES].filter((t) => GAME_FACT_TYPES.has(t));
     expect(overlap).toEqual([]);
-    expect(BOARD_FACT_TYPES.size + GAME_FACT_TYPES.size).toBe(20);
+    expect(BOARD_FACT_TYPES.size + GAME_FACT_TYPES.size).toBe(21);
   });
 
   it('classifies events', () => {

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { CommandIdSchema, PlayerIdSchema, ThrowIdSchema } from './ids';
-import { PlayerRefSchema } from './events';
+import { HouseRulesSchema, PlayerRefSchema } from './events';
 import { SegmentSchema } from './segment';
 
 export const COMMAND_SCHEMA_VERSION = 'arcade.command/v1';
@@ -30,6 +30,8 @@ export const StartSession = defineCommand(
     options: z.record(z.string(), z.unknown()),
     players: z.array(PlayerRefSchema).min(1).max(8),
     turnOrder: z.array(PlayerIdSchema).optional(),
+    /** The W2 house-rule toggles. The host falls back to its configured defaults when absent. */
+    houseRules: HouseRulesSchema.optional(),
   }),
 );
 export const CorrectDart = defineCommand('CorrectDart', z.object({ throwId: ThrowIdSchema, segment: SegmentSchema }));
@@ -47,9 +49,17 @@ export const AddDart = defineCommand(
     reason: z.enum(['undetected', 'bounce-out', 'manual-mode']),
   }),
 );
+/** Ends the current turn ("Next player", also the manual-mode turn end). Before the first turn, starts it. */
 export const SkipTurn = defineCommand('SkipTurn', z.object({}));
-export const Pause = defineCommand('Pause', z.object({ reason: z.enum(['menu', 'correction']) }));
-export const Resume = defineCommand('Resume', z.object({}));
+const UserPauseReasonSchema = z.enum(['menu', 'correction', 'app-background']);
+export const Pause = defineCommand('Pause', z.object({ reason: UserPauseReasonSchema }));
+/** Lifts the given pause, or every menu / correction / app-background pause when no reason is given. */
+export const Resume = defineCommand('Resume', z.object({ reason: UserPauseReasonSchema.optional() }));
+/**
+ * Confirms a turn flagged `needsReview`. The host records `TurnReviewed`; if the game was paused
+ * for that turn's review, it then resumes (`GameResumed{review}`) and starts the next turn.
+ */
+export const ConfirmTurn = defineCommand('ConfirmTurn', z.object({ turnIndex: z.int().min(0) }));
 export const Rematch = defineCommand('Rematch', z.object({}));
 export const CloseSession = defineCommand('CloseSession', z.object({ outcome: z.enum(['completed', 'abandoned']) }));
 
@@ -61,7 +71,10 @@ export const ArcadeCommandSchema = z.discriminatedUnion('type', [
   SkipTurn,
   Pause,
   Resume,
+  ConfirmTurn,
   Rematch,
   CloseSession,
 ]);
 export type ArcadeCommand = z.infer<typeof ArcadeCommandSchema>;
+export type ArcadeCommandType = ArcadeCommand['type'];
+export type CommandOf<T extends ArcadeCommandType> = Extract<ArcadeCommand, { type: T }>;
