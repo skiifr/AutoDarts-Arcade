@@ -1,4 +1,5 @@
 import type { GameModule } from '@arcade/engine';
+import { aroundTheClock } from './around-the-clock/module';
 import { countdown } from './countdown/module';
 import { cricket } from './cricket/module';
 
@@ -9,6 +10,7 @@ export type { BaseView, ScoreRow } from './shared/view';
 export const GAMES: readonly GameModule<any, any, any>[] = [
   countdown,
   cricket,
+  aroundTheClock,
 ];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see GAMES

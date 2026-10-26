@@ -1,0 +1,20 @@
+{
+  "description": "Skip ahead, finishing on 20: Alex's doubles and trebles beat Jo's steady singles and trebles.",
+  "players": ["Alex", "Jo"],
+  "options": { "finishOnBull": false, "skipAhead": true },
+  "visits": [
+    ["T1", "T4", "D7"],
+    ["S1", "S2", "S3"],
+    ["T9", "T12", "T15"],
+    ["T4", "T7", "T10"],
+    ["D18", "D20", "S5"]
+  ],
+  "expect": {
+    "finished": true,
+    "turns": 5,
+    "standings": [
+      { "player": "Alex", "rank": 1, "score": 20 },
+      { "player": "Jo", "rank": 2, "score": 12 }
+    ]
+  }
+}
