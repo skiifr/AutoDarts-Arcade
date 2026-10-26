@@ -7,7 +7,7 @@
 > - TV target: **Fire TV Stick 4K Max (Fire OS)**.
 > - Distribution with no public store listings: **TestFlight** for iPhone and iPad (paid Apple Developer account); ADB sideload for Fire TV and Android.
 > - Detection host: the current **Raspberry Pi 4 through Phase 5**. An upgrade is considered only if the post-P5 **H1 hardware review** proves it's needed.
-> - See [ROADMAP Q1–Q6](ROADMAP.md#owner-decisions-answered-2026-10-26).
+> - See [ROADMAP Q1–Q7](ROADMAP.md#owner-decisions-answered-2026-10-26).
 > **Companion documents:** [ROADMAP.md](ROADMAP.md) · [RISK-REGISTER.md](RISK-REGISTER.md)
 
 ### Evidence legend
