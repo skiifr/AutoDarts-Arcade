@@ -1,9 +1,8 @@
-import type { Rng } from '@arcade/engine';
+import { createRng, type Rng } from '@arcade/engine';
 import { MISS, makeSegment } from '@arcade/event-schema';
 import { describe, expect, it } from 'vitest';
 import {
   aimingThrower,
-  createRng,
   makePlayers,
   runSession,
   scoredDart,

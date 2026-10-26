@@ -161,8 +161,9 @@ Visits are in throwing order and use labels `T20`, `D16`, `S5`, `25`, `BULL` and
 short visit is padded with misses. `src/fixtures.test.ts` plays every fixture of every
 registered game.
 
-Fixtures for games that use the `Rng` (Siege) are recorded with the harness's generator
-(`createRng`, cyrb128 → sfc32). If the engine draws differently, re-record them.
+Fixtures for games that use the `Rng` (Siege) are recorded with the engine's generator
+(`createRng` from `@arcade/engine`), the one sessions run on. If it ever changes, re-record
+them.
 
 ### Headless runner
 

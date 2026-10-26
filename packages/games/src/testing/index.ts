@@ -6,5 +6,4 @@ export * from './darts';
 export * from './fixtures';
 export * from './harness';
 export * from './players';
-export * from './rng';
 export * from './thrower';

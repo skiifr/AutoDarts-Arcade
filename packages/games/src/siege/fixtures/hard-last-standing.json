@@ -1,31 +1,29 @@
 {
-  "description": "Hard, two players: Jo's wall falls in round 9 and Alex wins as the last player standing. Recorded from the seeded thrower; waves come from the harness Rng.",
+  "description": "Hard, two players: Jo's wall falls in round 8 and Alex wins as the last player standing. Recorded from the seeded thrower; waves come from the engine's Rng.",
   "players": ["Alex", "Jo"],
   "options": { "rounds": 10, "difficulty": "hard" },
-  "seed": "last-standing",
+  "seed": "last-standing-1",
   "visits": [
-    ["S2", "S1", "S3"],
-    ["S17", "T2", "S20"],
-    ["S2", "S17", "S17"],
-    ["T1", "MISS", "MISS"],
-    ["MISS", "S16", "D12"],
-    ["S17", "S7", "T16"],
-    ["S9", "S9", "S11"],
-    ["S12", "D9", "S11"],
-    ["S8", "S19", "D3"],
-    ["D8", "S3", "MISS"],
-    ["S7", "S4", "S4"],
-    ["S16", "S7", "S18"],
-    ["S1", "S1", "S11"],
-    ["S20", "D1", "S4"],
-    ["S14", "S14", "S19"],
-    ["S14", "S9", "S9"],
-    ["S5", "S7", "D15"],
-    ["S20", "S12", "S12"]
+    ["S1", "T20", "S13"],
+    ["S20", "S1", "S20"],
+    ["S10", "S6", "S17"],
+    ["S6", "MISS", "T3"],
+    ["S3", "S3", "S5"],
+    ["S17", "MISS", "S20"],
+    ["S12", "S5", "S16"],
+    ["MISS", "MISS", "S5"],
+    ["S16", "S11", "S8"],
+    ["S16", "MISS", "D8"],
+    ["S7", "D19", "S5"],
+    ["T19", "S5", "S11"],
+    ["S14", "MISS", "S9"],
+    ["S9", "S3", "S17"],
+    ["S2", "D17", "S12"],
+    ["S3", "S3", "MISS"]
   ],
   "expect": {
     "finished": true,
-    "turns": 18,
-    "standings": [{ "player": "Alex", "rank": 1, "score": 3 }, { "player": "Jo", "rank": 2, "score": 0 }]
+    "turns": 16,
+    "standings": [{ "player": "Alex", "rank": 1, "score": 2 }, { "player": "Jo", "rank": 2, "score": 0 }]
   }
 }

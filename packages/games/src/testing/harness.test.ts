@@ -1,11 +1,10 @@
-import type { GameModule } from '@arcade/engine';
+import { createRng, type GameModule } from '@arcade/engine';
 import type { Standing } from '@arcade/event-schema';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   aimedDart,
   aimingThrower,
-  createRng,
   defaultNames,
   makePlayers,
   parseDart,
@@ -141,22 +140,38 @@ describe('runSession', () => {
   });
 });
 
-describe('createRng', () => {
-  it('repeats for a seed and differs between seeds', () => {
-    const a = createRng('abc');
-    const b = createRng('abc');
-    const c = createRng('abd');
-    const seq = (r: ReturnType<typeof createRng>) => Array.from({ length: 5 }, () => r.next());
-    const first = seq(a);
-    expect(seq(b)).toEqual(first);
-    expect(seq(c)).not.toEqual(first);
-    expect(first.every((x) => x >= 0 && x < 1)).toBe(true);
+/** Two turns; keeps every number it draws in its state, so a replayed turn draws the same again. */
+interface DiceState {
+  players: string[];
+  turns: number;
+  draws: number[];
+}
+
+const dice: GameModule<object, DiceState, { targets: number[] }> = {
+  manifest: { id: 'dice', version: '1.0.0', name: 'Dice', players: { min: 1, max: 8 }, category: 'practice', dartsPerTurn: 3 },
+  options: z.object({}),
+  init: ({ players, rng }) => ({ players: players.map((p) => p.playerId), turns: 0, draws: [rng.next()] }),
+  onDart: (state, _dart, ctx) => ({ state: { ...state, draws: [...state.draws, ctx.rng.int(1, 6)] } }),
+  onTurnEnd: (state, ctx) => ({ state: { ...state, turns: state.turns + 1, draws: [...state.draws, ctx.rng.next()] } }),
+  nextPlayer: (state) => (state.turns >= 2 ? null : state.players[state.turns % state.players.length]!),
+  result: (state) => (state.turns >= 2 ? state.players.map((playerId) => ({ playerId, rank: 1, score: 0 })) : null),
+  view: () => ({ targets: [20] }),
+};
+
+describe('the Rng', () => {
+  /** What `dice` draws from the engine's generator for two visits of three darts. */
+  const expected = (seed: string) => {
+    const rng = createRng(seed);
+    const visit = () => [rng.int(1, 6), rng.int(1, 6), rng.int(1, 6), rng.next()];
+    return [rng.next(), ...visit(), ...visit()];
+  };
+
+  it("is the engine's generator for the seed, one stream through init, darts and turn ends", () => {
+    expect(runSession(dice, { players, seed: 'abc', darts: darts(['S1'], ['S2']) }).state.draws).toEqual(expected('abc'));
   });
 
-  it('draws integers across the whole inclusive range', () => {
-    const rng = createRng('range');
-    const seen = new Set(Array.from({ length: 500 }, () => rng.int(1, 6)));
-    expect([...seen].sort()).toEqual([1, 2, 3, 4, 5, 6]);
+  it('defaults the seed to "arcade"', () => {
+    expect(runSession(dice, { players, darts: darts([], []) }).state.draws).toEqual(expected('arcade'));
   });
 });
 

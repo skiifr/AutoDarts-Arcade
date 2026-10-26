@@ -1,7 +1,6 @@
-import type { ScoredDart, TurnCtx } from '@arcade/engine';
+import { createRng, type ScoredDart, type TurnCtx } from '@arcade/engine';
 import { INNER_BULL, MISS, OUTER_BULL, makeSegment, points, type PlayerId, type Segment } from '@arcade/event-schema';
 import { testId } from './players';
-import { createRng } from './rng';
 
 /**
  * Parses the dart labels used in scripts and fixtures: "T20", "D16", "S5", "25" (outer
