@@ -2,6 +2,7 @@ import type { BoardFactDraft } from '@arcade/event-schema';
 import { describe, expect, it } from 'vitest';
 import { isoFromEpochMs } from '../simulator/iso-time';
 import { EPOCH, brief, makeRig, ofType, type Rig } from '../testing/rig';
+import { MAX_BUFFERED_FRAMES } from './adapter';
 import { rebuildVisitState } from './rebuild';
 
 /**
@@ -139,6 +140,113 @@ describe('crash-resume after the last dart was pulled', () => {
     expect(brief(second.facts)).toEqual([]);
   });
 });
+
+describe('finding 6: a malformed throw, or any unexpected error, never wedges the adapter', () => {
+  const HOSTILE_STATE = '{"connected":true,"running":true,"status":"Throw","event":"Throw detected","numThrows":1,"throws":[{"segment":{"name":"M","multiplier":{"toString":0,"valueOf":0}}}]}';
+
+  /** A rig whose `GET /api/state` answers `body()` instead of the board's state while it returns a string. */
+  function stateRig(body: () => string | undefined, options: Parameters<typeof makeRig>[0] = {}): Rig {
+    return makeRig({
+      ...options,
+      wrapTransport: (inner) => ({
+        openEvents: (o, h) => inner.openEvents(o, h),
+        get: async (path, o) => {
+          const res = await inner.get(path, o);
+          const b = path === '/api/state' ? body() : undefined;
+          return b === undefined ? res : { ...res, body: b };
+        },
+      }),
+    });
+  }
+
+  it('the reviewer’s throw on the resync read: online, the dart a miss pending review', async () => {
+    const rig = stateRig(() => HOSTILE_STATE);
+    rig.adapter.start();
+    await rig.sched.advance(500);
+    expect(rig.adapter.connectionStatus().phase).toBe('online');
+    const [dart] = ofType(rig.facts, 'DartDetected');
+    expect(dart?.payload).toMatchObject({ segment: { label: 'MISS' }, pendingReview: true });
+    expect(ofType(rig.facts, 'SourceAnomaly').some((f) => /miss hint with multiplier/.test(f.payload.note))).toBe(true);
+  });
+
+  it('the same throw in a frame and in liveness polls: reported, and the polls keep coming', async () => {
+    let hostile = false;
+    const rig = stateRig(() => (hostile ? HOSTILE_STATE : undefined));
+    rig.adapter.start();
+    await rig.sched.advance(200);
+    rig.transport.inject(`{"type":"state","data":${HOSTILE_STATE}}`);
+    await rig.sched.advance(200);
+    hostile = true;
+    const t0 = rig.sched.now();
+    await rig.sched.advance(60_000);
+    expect(rig.adapter.connectionStatus().phase).toBe('online');
+    expect(rig.transport.httpRequestsSince(t0).filter((r) => r.path === '/api/state').length).toBeGreaterThanOrEqual(10);
+  });
+
+  it('an error thrown while applying a snapshot becomes a SourceAnomaly, on every path', async () => {
+    let fail = true;
+    const rig = makeRig({
+      observer: {
+        beforeApply: () => {
+          if (fail) throw new Error('boom');
+        },
+      },
+    });
+    rig.adapter.start();
+    await rig.sched.advance(500);
+    expect(rig.adapter.connectionStatus().phase).toBe('online'); // the resync
+    rig.board.throwDart({ segment: 'T20' }); // a frame
+    await rig.sched.advance(6000); // and liveness polls
+    expect(rig.adapter.connectionStatus().phase).toBe('online');
+    const polls = rig.transport.httpRequestsSince(0).filter((r) => r.path === '/api/state').length;
+    await rig.sched.advance(30_000);
+    expect(rig.transport.httpRequestsSince(0).filter((r) => r.path === '/api/state').length).toBeGreaterThan(polls + 3);
+    expect(ofType(rig.facts, 'SourceAnomaly').map((f) => f.payload.note)).toContain('internal error while applying a board state: boom');
+    // Once the error stops, the next read heals the stream.
+    fail = false;
+    await rig.sched.advance(6000);
+    expect(ofType(rig.facts, 'DartDetected').map((f) => f.payload.segment.label)).toEqual(['T20']);
+  });
+
+  it('a resync stuck past its timeout plus 1 s is abandoned and retried', async () => {
+    const rig = makeRig();
+    const adapter = rig.adapter as unknown as { fetchResyncSnapshot: (gen: number) => void };
+    const real = adapter.fetchResyncSnapshot.bind(rig.adapter);
+    let stuck = 1;
+    adapter.fetchResyncSnapshot = (gen) => {
+      if (stuck-- > 0) return; // a bug: the read is never made
+      real(gen);
+    };
+    rig.adapter.start();
+    await rig.sched.advance(2900);
+    expect(rig.adapter.connectionStatus().phase).toBe('resyncing');
+    await rig.sched.advance(1500);
+    expect(rig.adapter.connectionStatus().phase).toBe('online');
+    expect(ofType(rig.facts, 'SourceConnectionChanged').map((f) => [f.payload.state, f.payload.error])).toContainEqual(['offline', 'resync did not finish within 3000 ms']);
+  });
+
+  it('frames buffered during a slow resync are capped', async () => {
+    let applied = 0;
+    const rig = makeRig({
+      observer: { beforeApply: () => void applied++ },
+      wrapTransport: (inner) => ({
+        openEvents: (o, h) => inner.openEvents(o, h),
+        get: (path, o) => (path === '/api/state' && applied === 0 ? new Promise((r) => setTimeoutOn(rig, () => r(inner.get(path, o)), 1500)) : inner.get(path, o)),
+      }),
+    });
+    rig.adapter.start();
+    await rig.sched.advance(100);
+    for (let i = 0; i < 500; i++) rig.transport.inject(`{"type":"state","data":${rig.board.stateJson()}}`);
+    await rig.sched.advance(3000);
+    expect(rig.adapter.connectionStatus().phase).toBe('online');
+    expect(applied).toBeLessThanOrEqual(MAX_BUFFERED_FRAMES + 3);
+    expect(ofType(rig.facts, 'SourceAnomaly').some((f) => /oldest dropped/.test(f.payload.note))).toBe(true);
+  });
+});
+
+function setTimeoutOn(rig: Rig, fn: () => void, ms: number): void {
+  rig.sched.setTimeout(fn, ms);
+}
 
 describe('finding 4: a takeout called off with the same darts', () => {
   it('throwing(A) → (A,B) → takeout → called off → the board retracts B: B is withdrawn', async () => {

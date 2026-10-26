@@ -106,19 +106,116 @@ export function redactSecrets(text: string): string {
   return text.replace(SECRET_VALUE, '$1"[redacted]"');
 }
 
-/** A size-capped, secret-free excerpt for `SourceAnomaly.rawExcerpt` and diagnostics. */
-export function excerpt(value: unknown, max = MAX_EXCERPT_CHARS): string {
-  let text: string;
-  if (typeof value === 'string') text = value;
-  else {
-    try {
-      text = JSON.stringify(value) ?? String(value);
-    } catch {
-      text = String(value);
+/** Levels `serialize` descends into; deeper values read `[…]`. */
+const MAX_DEPTH = 16;
+
+/**
+ * A bounded JSON-style rendering of any value, for diagnostics. It never throws and runs no code
+ * of the value's: accessors read `[getter]`, and toJSON, toString and valueOf are never called, so
+ * a hostile value (a throwing getter or proxy trap, an object that cannot become a string, a
+ * cycle, nesting deeper than the stack) cannot break it. Plain JSON data comes out exactly as
+ * `JSON.stringify` writes it. Cycles read `[cycle]`, anything unreadable `[unreadable]`, and
+ * writing stops once `budget` characters are out (the result may run a little past it).
+ */
+export function serialize(value: unknown, budget: number): string {
+  const out: string[] = [];
+  let used = 0;
+  const path = new Set<object>();
+  const put = (s: string): void => {
+    out.push(s);
+    used += s.length;
+  };
+  const full = (): boolean => used >= budget;
+
+  const walk = (v: unknown, depth: number): void => {
+    switch (typeof v) {
+      case 'string':
+        put(JSON.stringify(v.length > budget ? v.slice(0, budget) : v));
+        return;
+      case 'number':
+        put(Number.isFinite(v) ? String(v) : 'null');
+        return;
+      case 'boolean':
+        put(v ? 'true' : 'false');
+        return;
+      case 'bigint':
+        put(v.toString(10));
+        return;
+      case 'undefined':
+        put('null');
+        return;
+      case 'symbol':
+      case 'function':
+        put('null');
+        return;
     }
+    if (v === null) {
+      put('null');
+      return;
+    }
+    const obj = v as object;
+    if (path.has(obj)) {
+      put('"[cycle]"');
+      return;
+    }
+    if (depth >= MAX_DEPTH) {
+      put('"[…]"');
+      return;
+    }
+    path.add(obj);
+    try {
+      if (Array.isArray(obj)) {
+        const length = Number(Object.getOwnPropertyDescriptor(obj, 'length')?.value ?? 0);
+        put('[');
+        for (let i = 0; i < length && !full(); i++) {
+          if (i > 0) put(',');
+          const d = Object.getOwnPropertyDescriptor(obj, String(i));
+          if (d && !('value' in d)) put('"[getter]"');
+          else walk(d?.value, depth + 1);
+        }
+        put(']');
+      } else {
+        put('{');
+        let first = true;
+        for (const k of Object.keys(obj)) {
+          if (full()) break;
+          const d = Object.getOwnPropertyDescriptor(obj, k);
+          if (!d) continue;
+          const item = 'value' in d ? d.value : '[getter]';
+          if (item === undefined || typeof item === 'function' || typeof item === 'symbol') continue;
+          put(`${first ? '' : ','}${JSON.stringify(k)}:`);
+          first = false;
+          walk(item, depth + 1);
+        }
+        put('}');
+      }
+    } catch {
+      put('"[unreadable]"');
+    } finally {
+      path.delete(obj);
+    }
+  };
+
+  try {
+    if (typeof value === 'undefined') return 'undefined';
+    if (typeof value === 'function') return '[function]';
+    if (typeof value === 'symbol') return '[symbol]';
+    walk(value, 0);
+    return out.join('');
+  } catch {
+    return '[unreadable]';
   }
+}
+
+/** A size-capped, secret-free excerpt for `SourceAnomaly.rawExcerpt` and diagnostics. Never throws. */
+export function excerpt(value: unknown, max = MAX_EXCERPT_CHARS): string {
   // Truncate before redacting so the regex never scans a huge string.
+  const text = typeof value === 'string' ? value : serialize(value, max * 2);
   const head = text.length > max * 2 ? text.slice(0, max * 2) : text;
   const clean = redactSecrets(head);
-  return clean.length > max ? `${clean.slice(0, max - 16)}…(${text.length} chars)` : clean;
+  if (clean.length <= max) return clean;
+  // A long value's serialization stops early, so its length is only a lower bound.
+  const length = typeof value === 'string' || text.length < max * 2 ? `${text.length}` : `${text.length}+`;
+  const suffix = `…(${length} chars)`;
+  return `${clean.slice(0, Math.max(0, max - suffix.length))}${suffix}`.slice(0, max);
 }

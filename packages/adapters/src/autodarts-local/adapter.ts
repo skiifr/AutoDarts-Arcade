@@ -1,7 +1,7 @@
 import type { BoardFactDraft, EventSource } from '@arcade/event-schema';
 import type { BoardGetPath } from '../endpoints';
 import { Listeners, type BoardSource, type Clock, type EventsSocket, type FactListener, type HttpResponse, type IdSource, type RandomSource, type Scheduler, type TimerHandle, type Transport } from '../ports';
-import { MAX_FRAME_CHARS, excerpt, parseEventFrame, parseStateBody } from '../raw';
+import { MAX_FRAME_CHARS, excerpt, parseEventFrame, parseStateBody, serialize } from '../raw';
 import { RawFrameRing, type RawChannel } from '../ring-buffer';
 import { epochMsFromIso } from '../simulator/iso-time';
 import type { RestoredVisitState } from './rebuild';
@@ -119,6 +119,12 @@ const MAX_DISTINCT_ANOMALIES = 64;
 const MAX_CONFIRM_ROUNDS = 2;
 
 /**
+ * Frames kept while a resync's state read is out. A board sends a frame per change, so a handful
+ * is normal; past this the oldest go (the read and the newest frames hold the latest state).
+ */
+export const MAX_BUFFERED_FRAMES = 64;
+
+/**
  * The Autodarts local-API adapter (ARCHITECTURE §6). Reads `WS /api/events` and
  * `GET /api/state`, never writes to the board (decision S), and turns the board's
  * snapshots into layer-1 board facts.
@@ -146,6 +152,8 @@ export class AutodartsLocalAdapter implements BoardSource {
 
   private connectTimer: TimerHandle | null = null;
   private openTimer: TimerHandle | null = null;
+  /** Abandons a resync that has not finished within its read's timeout plus the watchdog slack. */
+  private resyncTimer: TimerHandle | null = null;
   private livenessTimer: TimerHandle | null = null;
   private stuckTimer: TimerHandle | null = null;
 
@@ -299,6 +307,12 @@ export class AutodartsLocalAdapter implements BoardSource {
           this.resyncCorrelation = this.o.ids();
           this.emitConnection('resyncing');
           this.fetchResyncSnapshot(gen);
+          // Whatever goes wrong in the resync, it cannot hold the adapter in `resyncing`.
+          const limit = this.t.requestTimeoutMs + REQUEST_WATCHDOG_SLACK_MS;
+          this.resyncTimer = this.o.scheduler.setTimeout(() => {
+            this.resyncTimer = null;
+            if (gen === this.gen && this.phase === 'resyncing') this.attemptFailed(`resync did not finish within ${limit} ms`, true);
+          }, limit);
         },
         onMessage: (text) => {
           if (gen === this.gen) this.onFrame(text);
@@ -318,21 +332,24 @@ export class AutodartsLocalAdapter implements BoardSource {
   }
 
   private fetchResyncSnapshot(gen: number): void {
+    const failed = (why: string): void => {
+      if (this.buffered.length > 0) this.finishResync(null);
+      else this.attemptFailed(`state read failed${why}`, true);
+    };
     this.get('/api/state', gen).then(
       (res) => {
         if (gen !== this.gen) return;
-        const parsed = res.status === 200 ? parseStateBody(res.body) : null;
-        if (parsed?.ok) this.finishResync(toSnapshot(parsed.data));
-        else {
+        const read = this.safely('reading the resync state', res, () => {
+          const parsed = res.status === 200 ? parseStateBody(res.body) : null;
           if (parsed && !parsed.ok) this.anomalyOnce(parsed.note, res.body);
-          if (this.buffered.length > 0) this.finishResync(null);
-          else this.attemptFailed(`state read failed (HTTP ${res.status})`, true);
-        }
+          return { status: res.status, snap: parsed?.ok ? toSnapshot(parsed.data) : null };
+        });
+        if (gen !== this.gen) return;
+        if (read?.snap) this.finishResync(read.snap);
+        else failed(` (HTTP ${read?.status ?? 'unreadable'})`);
       },
       (err: unknown) => {
-        if (gen !== this.gen) return;
-        if (this.buffered.length > 0) this.finishResync(null);
-        else this.attemptFailed(`state read failed: ${errorText(err)}`, true);
+        if (gen === this.gen) failed(`: ${errorText(err)}`);
       },
     );
   }
@@ -345,13 +362,14 @@ export class AutodartsLocalAdapter implements BoardSource {
   private finishResync(snapshot: Snapshot | null): void {
     const queue = snapshot ? [...this.buffered, snapshot] : [...this.buffered];
     this.buffered = [];
+    this.clear('resyncTimer');
     const correlationId = this.resyncCorrelation ?? this.o.ids();
     let needsConfirm = false;
     const awayMs = this.awayMs();
     this.markContact(true);
     queue.forEach((snap, i) => {
       if (i === 0) this.applySnapshot(snap, 'resync', correlationId, awayMs);
-      else if (this.tracker.classifyFrame(snap) === 'apply') this.applySnapshot(snap, 'live');
+      else if (this.safely('classifying a frame', snap.raw, () => this.tracker.classifyFrame(snap)) === 'apply') this.applySnapshot(snap, 'live');
       else needsConfirm = true;
     });
     this.phase = 'online';
@@ -403,6 +421,7 @@ export class AutodartsLocalAdapter implements BoardSource {
 
   private teardown(): void {
     this.clear('openTimer');
+    this.clear('resyncTimer');
     this.clear('livenessTimer');
     this.clear('stuckTimer');
     this.clear('tickTimer');
@@ -436,25 +455,37 @@ export class AutodartsLocalAdapter implements BoardSource {
       this.anomalyOnce(`frame over ${MAX_FRAME_CHARS} chars dropped`, text);
       return;
     }
-    const parsed = parseEventFrame(text);
-    if (parsed.kind === 'invalid') {
-      this.anomalyOnce(parsed.note, text);
+    const snap = this.safely('reading a frame', text, () => {
+      const parsed = parseEventFrame(text);
+      if (parsed.kind === 'invalid') {
+        this.anomalyOnce(parsed.note, text);
+        return null;
+      }
+      // motion_state, cam_state, stats, cam_stats: they show the socket is alive but say nothing
+      // about the darts, so they do not hold off the liveness poll (the self-healing read).
+      if (parsed.kind === 'other') return null;
+      return toSnapshot(parsed.data);
+    });
+    if (snap === null) return;
+    if (snap === undefined) {
+      // Unreadable for a reason we did not foresee: read the board's state instead.
+      this.requestPoll();
       return;
     }
-    // motion_state, cam_state, stats, cam_stats: they show the socket is alive but say nothing
-    // about the darts, so they do not hold off the liveness poll (the self-healing read).
-    if (parsed.kind === 'other') return;
     if (this.phase === 'online') {
       this.markContact(true);
       this.armLiveness();
     }
-    const snap = toSnapshot(parsed.data);
     if (this.phase === 'resyncing') {
+      if (this.buffered.length >= MAX_BUFFERED_FRAMES) {
+        this.buffered.shift();
+        this.anomalyOnce(`more than ${MAX_BUFFERED_FRAMES} frames during a resync: the oldest dropped`, '');
+      }
       this.buffered.push(snap);
       return;
     }
     if (this.phase !== 'online') return;
-    if (this.tracker.classifyFrame(snap) === 'apply') this.applySnapshot(snap, 'live');
+    if (this.safely('classifying a frame', snap.raw, () => this.tracker.classifyFrame(snap)) === 'apply') this.applySnapshot(snap, 'live');
     else this.requestPoll();
   }
 
@@ -474,13 +505,18 @@ export class AutodartsLocalAdapter implements BoardSource {
         if (gen !== this.gen) return;
         this.pollInFlight = false;
         this.pollFailures = 0;
-        const parsed = res.status === 200 ? parseStateBody(res.body) : null;
-        if (parsed?.ok) {
+        const snap = this.safely('reading a state poll', res, () => {
+          const parsed = res.status === 200 ? parseStateBody(res.body) : null;
+          if (parsed?.ok) return toSnapshot(parsed.data);
+          this.anomalyOnce(parsed && !parsed.ok ? parsed.note : `state poll answered HTTP ${res.status}`, res.body);
+          return null;
+        });
+        if (snap) {
           this.markContact(true);
           this.socketInDoubt = false;
-          const snap = toSnapshot(parsed.data);
           const fresh = this.tracker.changeCount === changesAtIssue;
-          if (fresh || this.confirmRounds >= MAX_CONFIRM_ROUNDS || this.tracker.classifyFrame(snap) === 'apply') {
+          const plain = (): boolean => this.safely('classifying a state poll', snap.raw, () => this.tracker.classifyFrame(snap)) === 'apply';
+          if (fresh || this.confirmRounds >= MAX_CONFIRM_ROUNDS || plain()) {
             this.confirmRounds = 0;
             this.applySnapshot(snap, 'live');
           } else {
@@ -488,9 +524,9 @@ export class AutodartsLocalAdapter implements BoardSource {
             this.confirmRounds++;
             this.pollAgain = true;
           }
-        } else {
-          this.anomalyOnce(parsed && !parsed.ok ? parsed.note : `state poll answered HTTP ${res.status}`, res.body);
         }
+        // Whatever the read held, liveness goes on.
+        if (gen !== this.gen) return;
         this.armLiveness();
         if (this.pollAgain) {
           this.pollAgain = false;
@@ -632,13 +668,29 @@ export class AutodartsLocalAdapter implements BoardSource {
 
   // ── applying snapshots ───────────────────────────────────────────────────
 
+  /**
+   * Applies a snapshot. An error thrown on the way (a bug, a hook) becomes a SourceAnomaly: the
+   * snapshot is skipped and the adapter carries on; the next read heals the stream.
+   */
   private applySnapshot(snap: Snapshot, mode: ApplyMode, correlationId?: string, awayMs?: number): void {
-    for (const note of snap.notes) this.anomalyOnce(note, snap.raw);
-    for (const t of snap.throws) for (const note of t.notes) this.anomalyOnce(note, snap.raw);
-    this.o.observer?.beforeApply?.(snap, mode);
-    const facts = this.tracker.apply(snap, mode, awayMs);
-    for (const f of facts) this.emitTrackerFact(f, correlationId);
-    this.handleStatus(snap, correlationId);
+    this.safely('applying a board state', snap.raw, () => {
+      for (const note of snap.notes) this.anomalyOnce(note, snap.raw);
+      for (const t of snap.throws) for (const note of t.notes) this.anomalyOnce(note, snap.raw);
+      this.o.observer?.beforeApply?.(snap, mode);
+      const facts = this.tracker.apply(snap, mode, awayMs);
+      for (const f of facts) this.emitTrackerFact(f, correlationId);
+      this.handleStatus(snap, correlationId);
+    });
+  }
+
+  /** Runs `fn`; an error it throws is reported once as a SourceAnomaly and `undefined` returned. */
+  private safely<T>(what: string, raw: unknown, fn: () => T): T | undefined {
+    try {
+      return fn();
+    } catch (err) {
+      this.anomalyOnce(`internal error while ${what}: ${errorText(err)}`, raw);
+      return undefined;
+    }
   }
 
   private emitTrackerFact(f: TrackerFact, correlationId: string | undefined): void {
@@ -738,7 +790,7 @@ export class AutodartsLocalAdapter implements BoardSource {
     this.ring.push(this.o.clock(), channel, text);
   }
 
-  private clear(name: 'connectTimer' | 'openTimer' | 'livenessTimer' | 'stuckTimer' | 'tickTimer'): void {
+  private clear(name: 'connectTimer' | 'openTimer' | 'resyncTimer' | 'livenessTimer' | 'stuckTimer' | 'tickTimer'): void {
     const h = this[name];
     if (h !== null) {
       this.o.scheduler.clearTimeout(h);
@@ -749,7 +801,12 @@ export class AutodartsLocalAdapter implements BoardSource {
 
 type FactBody = BoardFactDraft extends infer D ? (D extends BoardFactDraft ? Pick<D, 'type' | 'payload'> : never) : never;
 
+/** A short description of anything thrown. Never throws itself. */
 function errorText(err: unknown): string {
-  if (err instanceof Error) return err.message.slice(0, 160);
-  return String(err).slice(0, 160);
+  try {
+    const message: unknown = err instanceof Error ? err.message : err;
+    return (typeof message === 'string' ? message : serialize(message, 160)).slice(0, 160);
+  } catch {
+    return 'an unreadable error';
+  }
 }
