@@ -1,5 +1,5 @@
 import { createRng, type GameModule } from '@arcade/engine';
-import type { Standing } from '@arcade/event-schema';
+import { parseArcadeEvent, type ArcadeEvent, type Standing } from '@arcade/event-schema';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
@@ -9,8 +9,10 @@ import {
   makePlayers,
   parseDart,
   parseVisits,
+  runOnHost,
   runSession,
   testId,
+  tickingClock,
 } from '.';
 
 /** First to `target` points wins. A treble 1 ends the turn early; a bust-style rule for tests. */
@@ -166,12 +168,95 @@ describe('the Rng', () => {
     return [rng.next(), ...visit(), ...visit()];
   };
 
-  it("is the engine's generator for the seed, one stream through init, darts and turn ends", () => {
-    expect(runSession(dice, { players, seed: 'abc', darts: darts(['S1'], ['S2']) }).state.draws).toEqual(expected('abc'));
+  it("is the engine's generator for the seed, one stream through init, darts and turn ends", async () => {
+    const spec = { players, seed: 'abc', darts: darts(['S1'], ['S2']) };
+    expect(runSession(dice, spec).state.draws).toEqual(expected('abc'));
+    expect((await runOnHost(dice, spec)).state.draws).toEqual(expected('abc'));
   });
 
-  it('defaults the seed to "arcade"', () => {
+  it('defaults the seed to "arcade"', async () => {
     expect(runSession(dice, { players, darts: darts([], []) }).state.draws).toEqual(expected('arcade'));
+    expect((await runOnHost(dice, { players, darts: darts([], []) })).state.draws).toEqual(expected('arcade'));
+  });
+});
+
+describe('runOnHost', () => {
+  const ofType = <T extends ArcadeEvent['type']>(log: readonly ArcadeEvent[], type: T) =>
+    log.filter((e): e is Extract<ArcadeEvent, { type: T }> => e.type === type);
+
+  it("plays the same session as runSession, through the engine's SessionHost", async () => {
+    const spec = { players, options: { target: 50 }, seed: 'host', darts: darts(['S20'], ['T1', 'T20', 'S5'], ['S10', 'S20'], ['S1']) };
+    const harness = runSession(toy, spec);
+    const run = await runOnHost(toy, spec);
+    expect(run.turns).toEqual(harness.turns);
+    expect(run.turns.map((t) => t.darts.map((d) => [d.label, d.scored, d.padded]))).toEqual([
+      [['S20', true, false], ['MISS', true, true], ['MISS', true, true]],
+      [['T1', true, false], ['T20', false, false], ['S5', false, false]],
+      [['S10', true, false], ['S20', true, false]],
+    ]);
+    expect(run.turns.map((t) => t.endTurn)).toEqual([null, 'bust', 'game-rule']);
+    expect(run).toMatchObject({ finished: true, standings: harness.standings, state: harness.state, view: harness.view, options: { target: 50 } });
+    expect(run.session).toMatchObject({ phase: 'closed', closed: { outcome: 'completed', finalStandings: harness.standings } });
+  });
+
+  it('logs a valid manual-mode session: AddDart per dart, SkipTurn per visit, the seed as rngSeed', async () => {
+    const { log } = await runOnHost(toy, { players, seed: 'abc', darts: darts(['S1', 'S2', 'S3'], ['S4']) });
+    expect(log.map((e) => e.seq)).toEqual(log.map((_, i) => i + 1));
+    for (const e of log) expect(parseArcadeEvent(e)).toEqual(e);
+    expect(ofType(log, 'SessionStarted')[0]!.payload).toMatchObject({ gameId: 'toy', rngSeed: 'abc' });
+    const added = ofType(log, 'DartAdded');
+    expect(added.map((e) => [e.payload.segment.label, e.payload.reason, e.source.kind])).toEqual(
+      ['S1', 'S2', 'S3', 'S4', 'MISS', 'MISS'].map((label) => [label, 'manual-mode', 'manual']),
+    );
+    expect(ofType(log, 'TurnEnded').map((e) => e.payload.reason)).toEqual(['manual-skip', 'manual-skip']);
+    expect(new Set(log.map((e) => e.eventId)).size).toBe(log.length);
+  });
+
+  it('stops after maxTurns and abandons the session', async () => {
+    const run = await runOnHost(toy, { players, maxTurns: 3, darts: () => parseDart('T1') });
+    expect(run.turns.map((t) => [t.name, t.darts.length, t.endTurn])).toEqual([
+      ['Alex', 1, 'bust'],
+      ['Jo', 1, 'bust'],
+      ['Alex', 1, 'bust'],
+    ]);
+    expect(run).toMatchObject({ finished: false, standings: null });
+    expect(run.session.closed).toEqual({ outcome: 'abandoned', finalStandings: [] });
+    expect(run.log.at(-2)).toMatchObject({ type: 'TurnStarted', payload: { turnIndex: 3 } });
+  });
+
+  it('leaves a short visit short when missing darts are not misses', async () => {
+    const run = await runOnHost(toy, { players, darts: darts(['S20']), padMissing: false });
+    expect(run.turns[0]!.darts).toHaveLength(1);
+  });
+
+  it('freezes game states so that a mutating game fails loudly', async () => {
+    const mutating: typeof toy = {
+      ...toy,
+      onDart: (state, dart) => {
+        state.scores[0]!.score += dart.points;
+        return { state };
+      },
+    };
+    await expect(runOnHost(mutating, { players, darts: darts(['S1']), freeze: true })).rejects.toThrow(TypeError);
+  });
+
+  it('throws when the host refuses an input', async () => {
+    await expect(runOnHost(toy, { players, options: { target: 0 }, darts: darts([]) })).rejects.toThrow(
+      /toy: the host did not apply StartSession: .*invalid-options/,
+    );
+    await expect(runOnHost(toy, { players, games: () => undefined, darts: darts([]) })).rejects.toThrow(/unknown-game/);
+    await expect(runOnHost(toy, { players, seed: '', darts: darts([]) })).rejects.toThrow(RangeError);
+  });
+});
+
+describe('tickingClock', () => {
+  it('ticks valid ISO timestamps without reading the clock, for one day', () => {
+    const clock = tickingClock(3_723_004);
+    expect([clock(), clock(), clock()]).toEqual(['2026-01-01T00:00:00.000Z', '2026-01-01T01:02:03.004Z', '2026-01-01T02:04:06.008Z']);
+    expect(tickingClock()()).toBe('2026-01-01T00:00:00.000Z');
+    const halfDays = tickingClock(43_200_000);
+    expect([halfDays(), halfDays()]).toEqual(['2026-01-01T00:00:00.000Z', '2026-01-01T12:00:00.000Z']);
+    expect(() => halfDays()).toThrow(RangeError);
   });
 });
 

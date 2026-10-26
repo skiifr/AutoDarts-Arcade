@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { gameRegistry } from '@arcade/engine';
 import { GAMES, gameById, type BaseView } from '@arcade/games';
 import {
   FixtureSchema,
@@ -9,7 +10,7 @@ import {
   defaultNames,
   makePlayers,
   parseVisits,
-  runSession,
+  runOnHost,
   type Fixture,
   type NamedStanding,
   type SessionResult,
@@ -17,9 +18,10 @@ import {
 
 const USAGE = `Usage: yarn play-headless --game <id> [options]
 
-Plays a game through the games test harness (a stand-in for the engine) and prints
-the turn log and standings. Without --script, a seeded pub-level thrower aims at
-whatever the game's view suggests.
+Plays a game through the engine's SessionHost, with an in-memory event log, as a
+manual-mode session: each dart is an AddDart command and each visit ends with
+SkipTurn. Prints the turn log and standings. Without --script, a seeded pub-level
+thrower aims at whatever the game's view suggests.
 
   -g, --game <id>        ${GAMES.map((g) => g.manifest.id).join(' | ')}
   -p, --players <n>      number of players (default: the game's minimum)
@@ -30,6 +32,7 @@ whatever the game's view suggests.
       --max-turns <n>    stop after n turns (default 1000)
       --record <file>    save the game as a fixture-style script, with its result as "expect"
       --json             print the result as JSON instead of the turn log
+      --log              print the session's event log as JSON lines instead of the turn log
   -h, --help             show this help`;
 
 class UsageError extends Error {}
@@ -37,10 +40,10 @@ class UsageError extends Error {}
 /** Paths are relative to where `yarn play-headless` was run, not to the repo root. */
 const fromCwd = (path: string) => resolve(process.env.INIT_CWD ?? process.cwd(), path);
 
-/** Runs the CLI and returns the process exit code. */
-export function main(argv: readonly string[]): number {
+/** Runs the CLI and resolves to the process exit code. */
+export async function main(argv: readonly string[]): Promise<number> {
   try {
-    return play(argv);
+    return await play(argv);
   } catch (error) {
     const code = (error as { code?: string }).code;
     if (error instanceof UsageError || code?.startsWith('ERR_PARSE_ARGS')) {
@@ -78,7 +81,7 @@ function readScript(path: string): { script: Fixture; game?: string } {
   return { script: parsed.data, game: typeof game === 'string' ? game : undefined };
 }
 
-function play(argv: readonly string[]): number {
+async function play(argv: readonly string[]): Promise<number> {
   const { values } = parseArgs({
     args: [...argv],
     options: {
@@ -91,6 +94,7 @@ function play(argv: readonly string[]): number {
       'max-turns': { type: 'string' },
       record: { type: 'string' },
       json: { type: 'boolean' },
+      log: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
     strict: true,
@@ -100,6 +104,7 @@ function play(argv: readonly string[]): number {
     console.log(USAGE);
     return 0;
   }
+  if (values.json && values.log) throw new UsageError('--json and --log both print to stdout; pick one.');
 
   const loaded = values.script ? readScript(values.script) : undefined;
   const id = values.game ?? loaded?.game;
@@ -130,18 +135,20 @@ function play(argv: readonly string[]): number {
   }
 
   const seed = values.seed ?? loaded?.script.seed ?? (loaded ? 'arcade' : randomBytes(3).toString('hex'));
+  if (seed === '') throw new UsageError('--seed must not be empty.');
   const maxTurns = values['max-turns'] ? Number(values['max-turns']) : undefined;
   if (maxTurns !== undefined && !(Number.isInteger(maxTurns) && maxTurns > 0)) {
     throw new UsageError('--max-turns expects a positive whole number.');
   }
 
   const players = makePlayers(names);
-  const result = runSession(game, {
+  const result = await runOnHost(game, {
     players,
     options: options.data,
     seed,
     darts: loaded ? parseVisits(loaded.script.visits) : aimingThrower(seed),
     maxTurns,
+    games: gameRegistry(GAMES),
   });
   const nameOf = (playerId: string) => players.find((p) => p.playerId === playerId)!.displayName;
   const standings: NamedStanding[] | null =
@@ -159,7 +166,9 @@ function play(argv: readonly string[]): number {
     writeFileSync(fromCwd(values.record), `${compactJson(recorded)}\n`);
   }
 
-  if (values.json) {
+  if (values.log) {
+    for (const event of result.log) console.log(JSON.stringify(event));
+  } else if (values.json) {
     console.log(
       JSON.stringify(
         {
@@ -192,8 +201,9 @@ function play(argv: readonly string[]): number {
     expected.finished === result.finished &&
     JSON.stringify(expected.standings) === JSON.stringify(standings ?? []) &&
     (expected.turns === undefined || expected.turns === result.turns.length);
-  if (!values.json) console.log(`\nExpected result: ${matches ? 'matches' : 'DIFFERS'}`);
-  if (!matches && !values.json) {
+  const human = !values.json && !values.log;
+  if (human) console.log(`\nExpected result: ${matches ? 'matches' : 'DIFFERS'}`);
+  if (!matches && human) {
     for (const s of expected.standings) console.log(`  ${s.rank}. ${s.player.padEnd(12)} ${s.score}`);
   }
   return matches ? 0 : 1;
