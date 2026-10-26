@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { isoFromEpochMs } from '../simulator/iso-time';
+import { epochMsFromIso, isoFromEpochMs } from '../simulator/iso-time';
 import { EPOCH, brief, makeRig, type Rig } from '../testing/rig';
 import { LINK_LOSS_MS } from './adapter';
+import { rebuildVisitState } from './rebuild';
 import { MIN_UNSEEN_VISIT_MS } from './visit-tracker';
 
 /**
@@ -196,6 +197,53 @@ describe('known darts missing from the snapshot always infer a takeout', () => {
     const from = rig.facts.length;
     await blip(rig, 400, () => rig.board.takeout());
     expect(after(rig, from)).toEqual(['takeout-end inferred']);
+  });
+});
+
+describe('lastContactAt(): the adapter’s own last contact, for the runtime to persist', () => {
+  const ms = (rig: Rig): number | undefined => {
+    const at = rig.adapter.lastContactAt();
+    return at === undefined ? undefined : (epochMsFromIso(at) as number) - EPOCH;
+  };
+
+  it('unknown before the first contact; then never later than LINK_LOSS_MS ago, while a healthy socket idles', async () => {
+    const rig = makeRig();
+    expect(rig.adapter.lastContactAt()).toBeUndefined();
+    rig.adapter.start();
+    for (const t of [200, 1700, 9000, 30_000]) {
+      await rig.sched.advance(t - rig.sched.now());
+      const at = ms(rig) as number;
+      expect(at).toBeLessThanOrEqual(rig.sched.now() - LINK_LOSS_MS);
+      expect(at).toBeGreaterThan(rig.sched.now() - LINK_LOSS_MS - 1100); // heartbeats keep it fresh
+    }
+  });
+
+  it('a half-open socket: once the adapter doubts it, only the last frame or read counts', async () => {
+    const rig = await online();
+    await rig.sched.advance(1000);
+    const lastRead = rig.sched.now();
+    rig.transport.setSilent(true);
+    await rig.sched.advance(6500); // liveness fired at 5 s; its poll hangs
+    expect(ms(rig) as number).toBeLessThanOrEqual(lastRead);
+    await rig.sched.advance(6000); // offline
+    expect(rig.adapter.connectionStatus().phase).not.toBe('online');
+    expect(ms(rig) as number).toBeLessThanOrEqual(lastRead);
+  });
+
+  it('passed back as observedAt after a crash, it keeps a quick relaunch from inferring a takeout', async () => {
+    const first = await online({ seed: 3 });
+    await first.sched.advance(8000); // idle: no board fact for 8 s
+    const restored = { ...rebuildVisitState(first.facts, () => ID), observedAt: first.adapter.lastContactAt() };
+    first.adapter.stop();
+    const second = makeRig({ seed: 3, restored, wallSkewMs: () => 8200 });
+    second.adapter.start();
+    await second.sched.advance(200);
+    expect(brief(second.facts)).toEqual([]);
+    // From the log alone (the last board fact 8 s before), a takeout may have happened.
+    const third = makeRig({ seed: 3, restored: rebuildVisitState(first.facts, () => ID), wallSkewMs: () => 8200 });
+    third.adapter.start();
+    await third.sched.advance(200);
+    expect(brief(third.facts)).toEqual(['takeout-end inferred']);
   });
 });
 

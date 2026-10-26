@@ -3,7 +3,7 @@ import type { BoardGetPath } from '../endpoints';
 import { Listeners, type BoardSource, type Clock, type EventsSocket, type FactListener, type HttpResponse, type IdSource, type RandomSource, type Scheduler, type TimerHandle, type Transport } from '../ports';
 import { MAX_FRAME_CHARS, cleanNote, excerpt, parseEventFrame, parseStateBody, serialize } from '../raw';
 import { RawFrameRing, type RawChannel } from '../ring-buffer';
-import { epochMsFromIso } from '../simulator/iso-time';
+import { epochMsFromIso, isoFromEpochMs } from '../simulator/iso-time';
 import type { RestoredVisitState } from './rebuild';
 import { toSnapshot, type Snapshot } from './snapshot';
 import { boardStatusOf, isKnownStatus, isStuckTakeoutCandidate, parseVersion, profileFor, type BoardStatus } from './status';
@@ -207,6 +207,21 @@ export class AutodartsLocalAdapter implements BoardSource {
   /** The last board status reported, for the health sampler. */
   currentBoardStatus(): BoardStatus | undefined {
     return this.stuckReported ? 'stuck-takeout' : this.boardStatus;
+  }
+
+  /**
+   * The last good contact with the board (ISO, the wall clock), as the adapter would count it if
+   * the link broke now: a frame, a state read, or an on-time heartbeat of a healthy socket, no
+   * later than LINK_LOSS_MS ago; once a liveness poll is out (the socket went quiet), only the
+   * last frame or read. A half-open socket goes unnoticed until liveness fires, so for up to
+   * `livenessMs` the value may run that much late. Undefined before any contact.
+   */
+  lastContactAt(): string | undefined {
+    const from = this.phase === 'online' && this.socketInDoubt ? this.evidence : this.contact;
+    const now = this.wallNow();
+    let wall = from.wall;
+    if (wall !== null && now !== null && this.phase === 'online') wall = Math.min(wall, now - LINK_LOSS_MS);
+    return wall === null ? undefined : isoFromEpochMs(wall);
   }
 
   get version(): string | undefined {
