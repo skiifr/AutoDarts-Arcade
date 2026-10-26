@@ -363,9 +363,10 @@ describe('Wi-Fi blips: a takeout is inferred only when the board was away long e
   it.each([
     // [situation, tracker, snapshot, away ms, facts]
     ['nothing known, empty board, blip', nothingKnown, takeoutFinished(), 1000, []],
-    ['the threshold is 2 s: just under', nothingKnown, takeoutFinished(), 1999, []],
-    ['the threshold is 2 s: at it', nothingKnown, takeoutFinished(), 2000, ['takeout-end inferred']],
-    ['nothing known, a dart after an outage of 2.7 s', nothingKnown, throwing(E), 2700, ['takeout-end inferred', 'detect 0:S12 recovered']],
+    ['the threshold is 3 s: just under', nothingKnown, takeoutFinished(), 2999, []],
+    ['the threshold is 3 s: at it', nothingKnown, takeoutFinished(), 3000, ['takeout-end inferred']],
+    ['nothing known, a dart after 2.8 s measured (a relaunch within 1.5 s): same visit', nothingKnown, throwing(E), 2800, ['detect 0:S12 recovered']],
+    ['nothing known, a dart after 3 s measured: a whole visit may have gone', nothingKnown, throwing(E), 3000, ['takeout-end inferred', 'detect 0:S12 recovered']],
     ['nothing known, empty board, just under the threshold', nothingKnown, takeoutFinished(), S - 1, []],
     ['nothing known, empty board, at the threshold', nothingKnown, takeoutFinished(), S, ['takeout-end inferred']],
     ['nothing known, empty board, long outage', nothingKnown, takeoutFinished(), 60_000, ['takeout-end inferred']],
@@ -672,10 +673,11 @@ describe('a takeout first seen with darts already pulled: they were removed, not
   });
 
   it.each([
-    // [known darts, away ms, facts] (chaos seeds 550, 673)
-    ['room for more, a long enough outage: a dart thrown and pulled meanwhile would be missing', [X], 3000, ['update T20->T20 review', 'takeout-start']],
+    // [known darts, away ms, facts] (chaos seeds 550, 673; 3596 and 5365 at 2.7 s measured)
+    ['room for more, a long outage: a dart thrown and pulled meanwhile would be missing', [X], 3000, ['update T20->T20 review', 'takeout-start']],
     ['room for more, an outage of unknown length', [X, Y], undefined, ['update T20->T20 review', 'update T19->T19 review', 'takeout-start']],
-    ['room for more, a blip too short to throw and pull a dart', [X], 1000, ['takeout-start']],
+    ['room for more, a short outage: one throw, the walk up and one pull need no whole visit', [X, Y], 2700, ['update T20->T20 review', 'update T19->T19 review', 'takeout-start']],
+    ['room for more, the shortest outage the adapter measures', [X], 1000, ['update T20->T20 review', 'takeout-start']],
     ['no room: three darts known', [X, Y, Z], 60_000, ['takeout-start']],
   ] as const)('a takeout first seen after an outage, every known dart still in: %s', (_label, known, away, facts) => {
     const t = online();

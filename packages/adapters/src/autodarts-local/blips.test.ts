@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { epochMsFromIso, isoFromEpochMs } from '../simulator/iso-time';
+import { SIM_MIN_VISIT_MS } from '../testing/chaos';
 import { EPOCH, brief, makeRig, type Rig } from '../testing/rig';
 import { LINK_LOSS_MS } from './adapter';
 import { rebuildVisitState } from './rebuild';
@@ -37,8 +38,9 @@ async function blip(rig: Rig, outageMs: number, during?: () => void): Promise<vo
 }
 
 describe('resync after an outage, nothing known and nothing on the board', () => {
-  it('the threshold is 2 s (owner decision)', () => {
-    expect(MIN_UNSEEN_VISIT_MS).toBe(2000);
+  it('the threshold is 3 s (owner decision): no longer than the shortest visit the simulations play', () => {
+    expect(MIN_UNSEEN_VISIT_MS).toBe(3000);
+    expect(MIN_UNSEEN_VISIT_MS).toBeLessThanOrEqual(SIM_MIN_VISIT_MS);
   });
 
   it.each([
@@ -73,9 +75,9 @@ describe('resync after an outage, nothing known and nothing on the board', () =>
     expect(await measured(MIN_UNSEEN_VISIT_MS - LINK_LOSS_MS + 100)).toEqual(['takeout-end inferred']);
   });
 
-  // Whatever happened just before the break, an outage of MIN_UNSEEN_VISIT_MS or more infers a
-  // takeout: the outage is measured from at least LINK_LOSS_MS before the break, so it never
-  // comes out shorter than the time the board was really out of sight.
+  // Whatever happened just before the break, an outage of MIN_UNSEEN_VISIT_MS less LINK_LOSS_MS or
+  // more infers a takeout: the outage is measured from at least LINK_LOSS_MS before the break, so
+  // it never comes out shorter than the time the board was really out of sight.
   const before = {
     'an idle board': async (rig: Rig) => {
       await rig.sched.advance(0);
@@ -89,7 +91,9 @@ describe('resync after an outage, nothing known and nothing on the board', () =>
   };
   it.each(
     [0, 150, 650, 2500, 20_000].flatMap((idle) =>
-      Object.keys(before).flatMap((what) => [MIN_UNSEEN_VISIT_MS, MIN_UNSEEN_VISIT_MS + 1, 2700].map((outage) => [idle, what, outage] as const)),
+      Object.keys(before).flatMap((what) =>
+        [MIN_UNSEEN_VISIT_MS - LINK_LOSS_MS, MIN_UNSEEN_VISIT_MS, MIN_UNSEEN_VISIT_MS + 1, 2700].map((outage) => [idle, what, outage] as const),
+      ),
     ),
   )('idle %d ms, then %s, then %d ms unreachable → inferred', async (idle, what, outage) => {
     const rig = await online();
@@ -112,7 +116,7 @@ describe('resync after an outage, nothing known and nothing on the board', () =>
     expect(after(rig, from)).toEqual(['takeout-end inferred']);
   });
 
-  it('a one-dart visit thrown and pulled inside a 2.7 s Wi-Fi drop is not lost (it infers a takeout)', async () => {
+  it('a one-dart visit thrown and pulled inside a 2.7 s Wi-Fi drop is not lost (it infers a takeout): the drop measures 2.7 s plus LINK_LOSS_MS', async () => {
     const rig = await online();
     for (const segment of ['T20', 'T20', 'T20']) {
       rig.board.throwDart({ segment });
@@ -250,7 +254,8 @@ describe('lastContactAt(): the adapter’s own last contact, for the runtime to 
 describe('crash-resume: the outage counts from the log’s last contact', () => {
   it.each([
     ['1 s ago', 1000, false],
-    ['2 s ago', 2000, true],
+    ['2.9 s ago', 2900, false],
+    ['3 s ago', 3000, true],
     ['60 s ago', 60_000, true],
     ['unknown', undefined, true],
   ])('board last read %s, nothing known, empty board → inferred: %s', async (_label, ago, inferred) => {

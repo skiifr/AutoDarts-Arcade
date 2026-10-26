@@ -1,4 +1,3 @@
-import { MIN_UNSEEN_VISIT_MS } from '../autodarts-local/visit-tracker';
 import { seededRandom } from '../random';
 import type { TimerHandle } from '../ports';
 import type { FaultPlan } from '../simulator/fake-transport';
@@ -6,12 +5,12 @@ import { ChaosRecorder, type ChaosStats } from './oracle';
 import { makeRig, type Rig } from './rig';
 
 /**
- * The shortest visit the simulation plays, from its first throw to its last dart out. A real
- * visit cannot be shorter than MIN_UNSEEN_VISIT_MS (throw, detect, pull the darts out); the
- * extra second covers the simulated network's frame delays (up to ~0.65 s with delay and
- * reorder faults), which the adapter cannot see. Real LAN latency is milliseconds.
+ * The shortest visit the simulation plays, from its first throw to its last dart out: 3 s, the
+ * shortest a real one can be (throw, detect, walk up, pull the darts out). MIN_UNSEEN_VISIT_MS
+ * must not exceed it (blips.test.ts). The simulated network's frame delays (up to ~0.65 s with
+ * delay and reorder faults) are covered by LINK_LOSS_MS, which every measured outage includes.
  */
-export const SIM_MIN_VISIT_MS = MIN_UNSEEN_VISIT_MS + 1000;
+export const SIM_MIN_VISIT_MS = 3000;
 
 /**
  * How often the chaos runs use the board behaviours the review found unreachable (all drawn from

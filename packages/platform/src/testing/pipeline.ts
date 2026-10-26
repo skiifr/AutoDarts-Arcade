@@ -7,7 +7,6 @@ import {
   AutodartsLocalAdapter,
   BoardModel,
   FakeBoardTransport,
-  MIN_UNSEEN_VISIT_MS,
   SIM_EPOCH_MS,
   VirtualScheduler,
   createUlidSource,
@@ -29,11 +28,11 @@ export const EPOCH = SIM_EPOCH_MS;
 export const REGISTRY: GameRegistry = gameRegistry(GAMES);
 
 /**
- * The shortest visit a simulation plays, first throw to takeout finished: the physical minimum
- * (MIN_UNSEEN_VISIT_MS) plus 1 s for the simulated network's frame delays (up to ~0.65 s with
- * delay and reorder faults), which a LAN does not have.
+ * The shortest visit a simulation plays, first throw to last dart out: 3 s, the shortest a real
+ * one can be, as in the adapter's chaos suite. The adapter's MIN_UNSEEN_VISIT_MS must not exceed
+ * it; the simulated network's frame delays are covered by LINK_LOSS_MS.
  */
-export const SIM_MIN_VISIT_MS = MIN_UNSEEN_VISIT_MS + 1000;
+export const SIM_MIN_VISIT_MS = 3000;
 
 /**
  * A `LogStore` over another that refuses chosen appends, as a full disk or a busy database

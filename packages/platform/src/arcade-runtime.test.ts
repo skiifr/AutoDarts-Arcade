@@ -2,7 +2,8 @@ import { ManualSource, SimulatorSource, seededRandom, type BoardSource, type Fac
 import { ulidFromNumber } from '@arcade/engine';
 import { isBoardFact, makeSegment, type BoardFactDraft } from '@arcade/event-schema';
 import { describe, expect, it, vi } from 'vitest';
-import { createArcadeRuntime } from './arcade-runtime';
+import { LINK_LOSS_MS } from '@arcade/adapters';
+import { CONTACT_EVERY_MS, createArcadeRuntime } from './arcade-runtime';
 import { MemoryContactStore } from './contact-store';
 import { REGISTRY, incarnate, makePlayers, makeWorld, type World } from './testing/pipeline';
 
@@ -360,14 +361,15 @@ describe('a failed log append of a board fact', () => {
 
 /**
  * Crash-resume on an idle board (§6.5). The log holds board facts only, and an idle board sends
- * none, so the log's last contact can be long before the crash. The runtime keeps its own
- * (`ContactStore`, written every 2 s while the board is online) and the resume measures the
- * outage from the later of the two: a quick restart on an idle, empty board infers nothing.
+ * none, so the log's last contact can be long before the crash. The runtime keeps the adapter's
+ * own (`ContactStore`: `lastContactAt()`, written every CONTACT_EVERY_MS while the board is
+ * online), and the resume measures the outage from the later of the two: a relaunch within 1.5 s
+ * on an idle, empty board infers nothing; one after 2 s already counts 3 s out of sight.
  */
 describe('crash-resume measures the outage from the last contact (ContactStore)', () => {
-  async function idleThenCrash(seed: string, idleMs: number, resumeAfterMs: number, contacts = new MemoryContactStore()) {
+  async function idleThenCrash(seed: string, idleMs: number, resumeAfterMs: number, contacts: MemoryContactStore | null = new MemoryContactStore()) {
     const world = makeWorld(seed);
-    const inc = incarnate(world, 0, { contacts });
+    const inc = incarnate(world, 0, contacts ? { contacts } : {});
     inc.runtime.start();
     await world.sched.advance(500);
     await inc.runtime.command('StartSession', COUNTDOWN);
@@ -385,31 +387,52 @@ describe('crash-resume measures the outage from the last contact (ContactStore)'
     const before = inc.runtime.getSnapshot()!;
     inc.kill(); // the app dies
     await world.sched.advance(resumeAfterMs);
-    const next = incarnate(world, 1, { contacts });
+    const next = incarnate(world, 1, contacts ? { contacts } : {});
     await next.runtime.resumeSession(sessionId);
     next.runtime.start();
     await world.sched.advance(2000);
     await next.runtime.whenIdle();
-    return { world, contacts, before, after: next.runtime.getSnapshot()! };
+    return { world, before, after: next.runtime.getSnapshot()!, writes: contacts?.writes ?? 0 };
   }
 
-  it.each([1000, 8000, 60_000])('idle %i ms after a takeout, a crash and an immediate restart: the waiting player keeps the turn', async (idleMs) => {
-    const { before, after, contacts } = await idleThenCrash(`idle-${idleMs}`, idleMs, 0);
+  it.each([
+    // [idle ms after a takeout, relaunched after ms]
+    [1000, 0],
+    [8000, 0],
+    [60_000, 0],
+    [1000, 1500],
+    [8000, 1500],
+    [60_000, 1500],
+  ])('idle %i ms after a takeout, a crash and a restart %i ms later: the waiting player keeps the turn', async (idleMs, resumeAfterMs) => {
+    const { before, after, writes } = await idleThenCrash(`idle-${idleMs}-${resumeAfterMs}`, idleMs, resumeAfterMs);
     expect(before.phase).toBe('playing');
     expect(after.phase).toBe('playing');
     expect(after.currentPlayerId).toBe(PLAYERS[1]!.playerId);
     expect(after.turns.map((t) => t.needsReview)).toEqual([false, false]);
     expect(after.awaitingReviewTurn).toBeNull();
-    if (idleMs > 2000) expect(contacts.writes).toBeGreaterThan(0);
+    expect(writes).toBeGreaterThan(0);
   });
 
-  it('a restart after the board was out of sight long enough for a whole visit still infers a takeout, flagged', async () => {
-    const { after } = await idleThenCrash('idle-long-down', 8000, 6000);
+  it.each([
+    // A crash ends the connection: the stored contact is LINK_LOSS_MS old (and up to a heartbeat
+    // more), so 2 s down already measures 3 s out of sight, long enough for a whole visit.
+    ['2 s', 8000, 2000],
+    ['6 s', 8000, 6000],
+  ])('a restart %s later, out of sight long enough for a whole visit, still infers a takeout, flagged', async (_label, idleMs, resumeAfterMs) => {
+    const { after } = await idleThenCrash(`idle-long-down-${resumeAfterMs}`, idleMs, resumeAfterMs);
     expect(after.phase).toBe('awaiting-review');
     expect(after.turns[1]!.needsReview).toBe(true);
   });
 
-  it('writes the contact at most every 2 s, only while the board is online and a session is open, and keeps it per session', async () => {
+  it('without a ContactStore the log’s last reading counts only up to LINK_LOSS_MS before it: the crash ended the connection', async () => {
+    // A crash 0.1 s after the takeout: the log's last reading is the takeout itself.
+    const quick = await idleThenCrash('log-only-quick', 100, 1500, null);
+    expect(quick.after.phase).toBe('playing');
+    const slower = await idleThenCrash('log-only-slower', 100, 2100, null);
+    expect(slower.after.phase).toBe('awaiting-review');
+  });
+
+  it('writes the adapter’s own last contact every CONTACT_EVERY_MS, only while the board is online and a session is open, and keeps it per session', async () => {
     const contacts = new MemoryContactStore();
     const world = makeWorld('contact-writes');
     const inc = incarnate(world, 0, { contacts });
@@ -419,16 +442,41 @@ describe('crash-resume measures the outage from the last contact (ContactStore)'
     await inc.runtime.command('StartSession', COUNTDOWN);
     const sessionId = inc.runtime.getSnapshot()!.sessionId;
     await world.sched.advance(10_000);
-    expect(contacts.writes).toBeGreaterThanOrEqual(4);
-    expect(contacts.writes).toBeLessThanOrEqual(5);
-    const at = await contacts.get(sessionId);
-    expect(world.simMs(at!)).toBeGreaterThan(world.sched.now() - 2100);
+    expect(CONTACT_EVERY_MS).toBe(250);
+    expect(contacts.writes).toBeGreaterThanOrEqual(39);
+    expect(contacts.writes).toBeLessThanOrEqual(41);
+    const at = world.simMs((await contacts.get(sessionId))!);
+    expect(at).toBeLessThanOrEqual(world.sched.now() - LINK_LOSS_MS);
+    expect(at).toBeGreaterThan(world.sched.now() - LINK_LOSS_MS - CONTACT_EVERY_MS - 50);
     world.transport.setReachable(false);
     await world.sched.advance(50);
     const offline = contacts.writes;
     await world.sched.advance(10_000);
     expect(contacts.writes).toBe(offline);
     expect(await contacts.get('01JBX0000000000000000OTHER')).toBeUndefined();
+  });
+
+  it('a source without lastContactAt stores its heartbeat less LINK_LOSS_MS: the same rule', async () => {
+    const world = makeWorld('contact-no-last');
+    const contacts = new MemoryContactStore();
+    const listeners = new Set<FactListener>();
+    const online = { type: 'SourceConnectionChanged', payload: { state: 'online' }, source: { kind: 'simulator', adapterVersion: 'x' } };
+    const source: BoardSource = {
+      kind: 'simulator',
+      start: () => listeners.forEach((l) => l({ ...online, occurredAt: world.clock() } as BoardFactDraft)),
+      stop: () => {},
+      subscribe: (l) => {
+        listeners.add(l);
+        return () => listeners.delete(l);
+      },
+    };
+    const runtime = createArcadeRuntime({ source, store: world.store, games: REGISTRY, clock: world.clock, ids: incIds(), scheduler: world.sched, contactStore: contacts });
+    runtime.start();
+    await runtime.command('StartSession', COUNTDOWN);
+    const sessionId = runtime.getSnapshot()!.sessionId;
+    await world.sched.advance(1000);
+    expect(contacts.writes).toBe(4);
+    expect(world.simMs((await contacts.get(sessionId))!)).toBe(1000 - LINK_LOSS_MS);
   });
 });
 

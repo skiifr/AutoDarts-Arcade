@@ -72,10 +72,11 @@ export interface ArcadeRuntimeOptions {
   scheduler?: Scheduler;
   /**
    * Where the last contact with the board is kept across a crash (§6.5). While the source is
-   * online and a session is open, the runtime records it every `CONTACT_EVERY_MS`, and
-   * `resumeSession` measures the outage from the later of it and the log's last reading. Without
-   * one, a resume after a quiet spell counts the whole spell as an outage, and may infer a
-   * takeout that never happened (§6.4). The app backs it with its key-value storage.
+   * online and a session is open, the runtime records the source's own `lastContactAt()` every
+   * `CONTACT_EVERY_MS`, and `resumeSession` measures the outage from the later of it and the
+   * log's last reading. Without one, a resume after a quiet spell counts the whole spell as an
+   * outage, and may infer a takeout that never happened (§6.4). The app backs it with its
+   * key-value storage.
    */
   contactStore?: ContactStore;
   /**
@@ -95,8 +96,13 @@ export type CommandPayload<T extends ArcadeCommandType> = CommandOf<T>['payload'
  */
 export const RECOVERY_BACKOFF_MS: readonly number[] = [1000, 2000, 5000, 10_000];
 
-/** How often the runtime records its contact with an online board (`contactStore`). */
-export const CONTACT_EVERY_MS = 2000;
+/**
+ * How often the runtime records the last contact with an online board (`contactStore`). A crash
+ * loses at most this much of it: a relaunch within 1.5 s then measures at most 1.5 s, plus this,
+ * plus LINK_LOSS_MS, plus the reconnect, which stays under MIN_UNSEEN_VISIT_MS (3 s). A tiny
+ * key-value write four times a second.
+ */
+export const CONTACT_EVERY_MS = 250;
 
 /** A heartbeat this late means the app was frozen (suspended, asleep): it proves nothing (as the adapter's). */
 const LATE_TICK_MS = 500;
@@ -370,12 +376,16 @@ export class ArcadeRuntime {
   }
 
   /**
-   * The source's visit state from `host`'s log, with the last time the board was in sight: the
-   * log's own (`observedAt`, from the latest reading it holds) or the runtime's contact, whichever
-   * is later. The contact is this run's (`contactMs`, only while it plays this very session) or
-   * `stored` from before a crash. A contact counts only up to LINK_LOSS_MS before it, as for any
-   * connection that ends (§6.4): frames the board sent just before may never have arrived. The
-   * adapter's `restore()` takes it as `observedAt`.
+   * The source's visit state from `host`'s log, with the last time the board was in sight, the
+   * latest of:
+   * - the log's own (`observedAt`, the latest reading it holds);
+   * - this run's contact (`contactMs`, only while it plays this very session);
+   * - `stored`, the source's `lastContactAt()` recorded before a crash.
+   * The connection ended (a crash, or the runtime let it go), so, as for any connection that ends
+   * (§6.4), the log's reading and this run's contact count only up to LINK_LOSS_MS before them:
+   * frames the board sent just before may never have arrived. `stored` already counts so (the
+   * adapter's `lastContactAt` applies its own contact rules) and is taken as it is. The adapter's
+   * `restore()` takes the result as `observedAt`.
    */
   private restoredState(host: SessionHost, known: { contactMs?: number | null; stored?: string | undefined }): RestoredVisitState {
     const state = rebuildVisitState(host.getLog().filter((e) => isBoardFact(e)), this.o.ids);
@@ -385,9 +395,9 @@ export class ArcadeRuntime {
     const sameSession = playing !== undefined && host.getSnapshot()?.sessionId === playing;
     const liveMs = known.contactMs === undefined ? this.contactMs : known.contactMs;
     const live = sameSession && liveMs !== null ? liveMs : undefined;
-    const contacts = [live, storedMs].filter((ms): ms is number => ms !== undefined);
-    const contact = contacts.length === 0 ? undefined : Math.max(...contacts) - LINK_LOSS_MS;
-    if (contact !== undefined && (fromLog === undefined || contact > fromLog)) state.observedAt = isoFromEpochMs(contact);
+    const ended = (ms: number | undefined): number | undefined => (ms === undefined ? undefined : ms - LINK_LOSS_MS);
+    const contacts = [ended(fromLog), ended(live), storedMs].filter((ms): ms is number => ms !== undefined);
+    if (contacts.length > 0) state.observedAt = isoFromEpochMs(Math.max(...contacts));
     return state;
   }
 
@@ -415,7 +425,9 @@ export class ArcadeRuntime {
   /**
    * While the source is online the board's state is known: it pushes every change, and the
    * adapter reconnects at once when it cannot. So an on-time heartbeat is contact. A late one
-   * (the app was frozen) proves nothing, as in the adapter.
+   * (the app was frozen) proves nothing, as in the adapter. What is stored is the source's own
+   * `lastContactAt()`: the adapter's contact rules, LINK_LOSS_MS included, already applied. A
+   * source without one stores the heartbeat less LINK_LOSS_MS, which comes to the same rule.
    */
   private contactTick(): void {
     this.contactTimer = null;
@@ -431,7 +443,8 @@ export class ArcadeRuntime {
     if (onTime && wall !== undefined && this.unsettled === 0) {
       this.noteContact(wall);
       if (snapshot !== null && snapshot.closed === null) {
-        this.o.contactStore!.set(snapshot.sessionId, isoFromEpochMs(wall)).catch((error: unknown) => this.report({ error }));
+        const at = this.source.lastContactAt ? this.source.lastContactAt() : isoFromEpochMs(wall - LINK_LOSS_MS);
+        if (at !== undefined) this.o.contactStore!.set(snapshot.sessionId, at).catch((error: unknown) => this.report({ error }));
       }
     }
     this.armContactTick();

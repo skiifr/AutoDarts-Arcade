@@ -95,13 +95,18 @@ export type ApplyMode = 'live' | 'resync';
 
 /**
  * The shortest time in which a whole visit can come and go unseen: someone throws one dart, the
- * board detects it, and the dart is pulled out (owner decision: 2 s; it was 5 s, but a visit of
- * one dart thrown and pulled fits in under 3 s). A resync with no known darts infers a takeout
- * only if the board was out of sight at least this long; shorter outages cannot hide one. The
- * adapter measures the outage from at least `LINK_LOSS_MS` before the link broke, so it never
- * comes out shorter than the time the board was out of sight.
+ * board detects it, and the dart is pulled out. No visit is shorter than 3 s, first dart to last
+ * dart out (owner decision; the simulations' visits are no shorter either). A resync with no
+ * known darts infers a takeout only if the board was out of sight at least this long; shorter
+ * outages cannot hide one. The adapter measures every outage from at least `LINK_LOSS_MS` before
+ * the connection ended (a crash included), so it never comes out shorter than the time the board
+ * was out of sight, and a hidden visit measures at least this plus that second.
+ *
+ * It was 5 s, then 2 s. At 2 s a quick crash-relaunch on an idle board measured as a hidden
+ * visit: its stored contact is up to `LINK_LOSS_MS` plus the runtime's heartbeat old. At 3 s a
+ * relaunch within 1.5 s with a fresh contact measures at most about 2.8 s.
  */
-export const MIN_UNSEEN_VISIT_MS = 2000;
+export const MIN_UNSEEN_VISIT_MS = 3000;
 
 const RECENT_VISITS = 2;
 
@@ -301,7 +306,7 @@ export class VisitTracker {
       this.diffDuringTakeout(snap, out, 'resync');
     } else if (takeoutBegins(snap)) {
       // Status first: darts missing from a takeout are being removed, not withdrawn.
-      this.takeoutSeen(snap, out, 'resync', awayMs);
+      this.takeoutSeen(snap, out, 'resync');
     } else {
       this.diffOrInfer(out, T, 'resync');
     }
@@ -478,11 +483,12 @@ export class VisitTracker {
    * darts, or that both lacks known darts and has new ones, means we cannot tell what happened:
    * an inferred takeout.
    *
-   * After an outage long enough to throw a dart and pull it (`MIN_UNSEEN_VISIT_MS`), a visit with
-   * room for another dart may also have had one we never saw, thrown and already pulled: then
-   * every dart of the visit is flagged.
+   * After an outage, a visit with room for another dart may also have had one we never saw,
+   * thrown and already pulled: then every dart of the visit is flagged. One throw, the walk to the
+   * board and one pull take far less than a whole visit (`MIN_UNSEEN_VISIT_MS`), and no outage
+   * the adapter measures is short enough to rule them out, so this holds after any outage.
    */
-  private takeoutSeen(snap: Snapshot, out: TrackerFact[], mode: ApplyMode, awayMs?: number): void {
+  private takeoutSeen(snap: Snapshot, out: TrackerFact[], mode: ApplyMode): void {
     const K = this.s.known;
     const T = snap.throws;
     const a = this.alignTakeout(T, mode);
@@ -496,7 +502,7 @@ export class VisitTracker {
     a.toKnown.forEach((j, i) => {
       if (j >= 0) K[j] = this.updated(out, K[j] as KnownDart, T[i] as NormalizedThrow, false);
     });
-    const unseenDartFits = mode === 'resync' && (awayMs === undefined || awayMs >= MIN_UNSEEN_VISIT_MS) && K.length + fresh < MAX_DARTS_PER_VISIT;
+    const unseenDartFits = mode === 'resync' && K.length + fresh < MAX_DARTS_PER_VISIT;
     K.forEach((_, j) => {
       if (!kept.has(j) || unseenDartFits) this.flagInDoubt(out, j);
     });
