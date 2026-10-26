@@ -453,6 +453,56 @@ describe("darts where the last visit's darts were: counted, flagged, never dropp
     const resumed = tracker(restored);
     expect(step(resumed, throwing(A20, B, C))).toEqual(['update T20->S20 review']);
   });
+
+  it('an adopted ghost is in the log, so a crash puts every later dart back in its place (finding 5)', () => {
+    // Before ghosts were emitted, the log lacked the ghost's DartDetected and the rebuilt
+    // visit had the later darts at the wrong positions.
+    const t = online();
+    const facts: TrackerFact[] = [];
+    for (const s of [throwing(A, B), takeoutStarted(A, B), takeoutFinished(), throwing(A), throwing(A, C)]) facts.push(...t.apply(s, 'live'));
+    const restored = rebuildVisitState(facts, () => '01JBX00000000000000000000V');
+    expect(restored.known.map((k) => [k.indexInVisit, k.segment.label, k.suspectedGhost ?? false])).toEqual([
+      [0, 'T20', true],
+      [1, 'T5', false],
+    ]);
+    expect(restored.known).toEqual(t.state().known);
+    expect(restored.visitKey).toBe(t.state().visitKey);
+    const resumed = tracker(restored);
+    for (const s of [throwing(A, C, E), throwing(C, E), throwing(C2, E), takeoutStarted(C2, E), takeoutFinished()]) {
+      expect(step(resumed, s)).toEqual(step(t, s));
+    }
+  });
+});
+
+describe('crash-resume edges the log cannot show exactly: never fewer flags', () => {
+  const ids = (): string => '01JBX00000000000000000000V';
+
+  it('the last dart out before "Takeout finished": the resumed tracker knows the takeout still showing is not a new one', () => {
+    const t = online();
+    const log: { type: string; payload: unknown }[] = [];
+    // As the adapter logs it: each snapshot's facts, then the board status when it changes.
+    const status = (s: string) => ({ type: 'BoardStatusChanged', payload: { status: s } });
+    log.push(...t.apply(throwing(A), 'live'), status('throwing'));
+    log.push(...t.apply(takeoutStarted(A), 'live'), status('takeout'));
+    log.push(...t.apply(takeoutStarted(), 'live')); // still "takeout": nothing new logged
+    const restored = rebuildVisitState(log, ids);
+    expect(restored.takeoutTail).toBe(true);
+    expect(step(tracker(restored), takeoutStarted(), 'resync', 1000)).toEqual([]);
+    // After a normal end, the board's status change says the takeout is over.
+    log.push({ type: 'BoardStatusChanged', payload: { status: 'ready' } });
+    expect(rebuildVisitState(log, ids).takeoutTail).toBeUndefined();
+  });
+
+  it('a takeout called off with 3 darts logs nothing: the resumed tracker ends it on the next snapshot, flagging if darts went missing', () => {
+    const t = online();
+    const log: TrackerFact[] = [];
+    for (const s of [throwing(A, B, C), takeoutStarted(A, B, C), snap('Takeout', 'Throw detected', [A, B, C])]) log.push(...t.apply(s, 'live'));
+    const restored = rebuildVisitState(log, ids);
+    expect([t.state().inTakeout, restored.inTakeout]).toEqual([false, true]);
+    expect(step(t, throwing(A, B), 'resync', 1000)).toEqual(['withdraw']);
+    expect(step(tracker(restored), throwing(A, B), 'resync', 1000)).toEqual(['withdraw', 'update T20->T20 review', 'update T20->T20 review']);
+    expect(step(tracker(restored), snap('Takeout', 'Throw detected', [A, B, C]), 'resync', 1000)).toEqual([]);
+  });
 });
 
 describe('frame classification (late or duplicated frames never retract darts)', () => {

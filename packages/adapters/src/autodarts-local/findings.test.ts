@@ -1,6 +1,8 @@
 import type { BoardFactDraft } from '@arcade/event-schema';
 import { describe, expect, it } from 'vitest';
-import { brief, makeRig, ofType, type Rig } from '../testing/rig';
+import { isoFromEpochMs } from '../simulator/iso-time';
+import { EPOCH, brief, makeRig, ofType, type Rig } from '../testing/rig';
+import { rebuildVisitState } from './rebuild';
 
 /**
  * Adapter-level regressions for the board-adapter review (owner decision R / NF3: never lose,
@@ -110,6 +112,31 @@ describe('finding 2: the board’s changes land on the dart it changed', () => {
     const [s1, s5] = ofType(rig.facts, 'DartDetected').map((f) => f.payload.throwId);
     expect(ofType(rig.facts, 'DartWithdrawn').map((f) => f.payload.throwId)).toEqual([s1]);
     expect(ofType(rig.facts, 'DartUpdated').map((f) => [f.payload.throwId, f.payload.previous.label, f.payload.segment.label])).toEqual([[s5, 'S5', 'S20']]);
+  });
+});
+
+describe('crash-resume after the last dart was pulled', () => {
+  it('the takeout still showing on the empty board is not a new, empty one', async () => {
+    const steps = async (rig: Rig, resume?: () => void): Promise<void> => {
+      rig.board.throwDart({ segment: 'T20' });
+      await rig.sched.advance(300);
+      rig.board.startTakeout();
+      await rig.sched.advance(300);
+      rig.board.pullDart();
+      await rig.sched.advance(300);
+      resume?.();
+    };
+    const first = await online({ seed: 6 });
+    await steps(first);
+    const restored = rebuildVisitState(first.facts, () => '01JBX00000000000000000000V');
+    expect(restored.takeoutTail).toBe(true);
+    // The app relaunches at once: the board was last read half a second before.
+    const second = makeRig({ seed: 6, restored: { ...restored, observedAt: isoFromEpochMs(EPOCH + 400) } });
+    await steps(second, () => second.adapter.start());
+    await second.sched.advance(500);
+    second.board.finishTakeout();
+    await second.sched.advance(500);
+    expect(brief(second.facts)).toEqual([]);
   });
 });
 

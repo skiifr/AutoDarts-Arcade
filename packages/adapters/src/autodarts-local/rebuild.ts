@@ -48,6 +48,10 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
   let inTakeout = false;
   const recent: KnownDart[][] = [];
 
+  /** The board status last logged, and whether the last visit's takeout still shows (`takeoutTail`). */
+  let boardStatus: string | undefined;
+  let tail = false;
+
   const endVisit = (keep = true): void => {
     // Like the tracker: darts voided by a manual reset are not remembered.
     if (keep && known.length > 0) recent.unshift(known);
@@ -62,6 +66,7 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
     switch (e.type) {
       case 'DartDetected': {
         const p = e.payload;
+        tail = false;
         if (p.visitKey !== visitKey) {
           if (visitKey !== null) endVisit();
           visitKey = p.visitKey;
@@ -95,20 +100,41 @@ export function rebuildVisitState(events: readonly FactLike[], ids: IdSource): R
         known = known.filter((k) => k.throwId !== e.payload.throwId);
         break;
       case 'TakeoutStarted':
+        tail = false;
         if (visitKey === null) visitKey = e.payload.visitKey;
         if (e.payload.visitKey === visitKey) inTakeout = true;
         break;
       case 'TakeoutFinished':
-        if (visitKey === null || e.payload.visitKey === visitKey) endVisit();
+        if (visitKey === null || e.payload.visitKey === visitKey) {
+          // Ended while the board still showed the takeout (its status logged no change, and no
+          // new takeout followed): the last dart came out before the board's "Takeout finished".
+          tail = boardStatus === 'takeout' && known.length > 0;
+          endVisit();
+        }
         break;
       case 'VisitReset':
+        tail = false;
         if (visitKey === null || e.payload.visitKey === visitKey) endVisit(false);
         break;
+      case 'BoardStatusChanged': {
+        const status = e.payload.status;
+        // The board back to throwing ends a takeout it called off with the darts still in. (With
+        // 3 darts it returns to "Takeout", which logs nothing new: the rebuilt state is then
+        // still in the takeout, and the next snapshot ends it, flagging the darts left if any
+        // went missing. More flags, never fewer.)
+        if (status === 'throwing' || status === 'ready') inTakeout = false;
+        if (status !== 'stuck-takeout') {
+          boardStatus = status;
+          if (status !== 'takeout') tail = false;
+        }
+        break;
+      }
       default:
         break;
     }
   }
   const state: RestoredVisitState = { visitKey: visitKey ?? ids(), known: known.filter(Boolean), inTakeout, recentVisits: recent };
+  if (tail) state.takeoutTail = true;
   if (observedAt !== undefined) state.observedAt = observedAt;
   return state;
 }

@@ -63,6 +63,11 @@ export interface VisitState {
   inTakeout: boolean;
   /** Darts of the last ended visits, newest first, to recognise them if they reappear. */
   recentVisits: KnownDart[][];
+  /**
+   * The last visit ended when its last dart came out, and the board still shows that takeout on
+   * the empty board: that is not a new, empty takeout.
+   */
+  takeoutTail?: true;
 }
 
 export type TrackerFact =
@@ -105,7 +110,7 @@ export class VisitTracker {
    * empty board (darts pulled one at a time, before "Takeout finished"). That is the end of the
    * same takeout, not a new, empty one.
    */
-  private takeoutTail = false;
+  private takeoutTail: boolean;
 
   constructor(ids: IdSource, restored?: VisitState) {
     this.ids = ids;
@@ -118,16 +123,19 @@ export class VisitTracker {
           recentVisits: restored.recentVisits.map((v) => v.map(copyDart)),
         }
       : { visitKey: ids(), known: [], inTakeout: false, recentVisits: [] };
+    this.takeoutTail = restored?.takeoutTail === true;
   }
 
   /** A copy of the current visit state (for diagnostics and tests). */
   state(): VisitState {
-    return {
+    const s: VisitState = {
       visitKey: this.s.visitKey,
       known: this.s.known.map(copyDart),
       inTakeout: this.s.inTakeout,
       recentVisits: this.s.recentVisits.map((v) => v.map(copyDart)),
     };
+    if (this.takeoutTail) s.takeoutTail = true;
+    return s;
   }
 
   /** Increments whenever an applied snapshot changed the state. */
