@@ -1,6 +1,6 @@
 import { BOARD_PORT, parseVersion, type Transport } from '@arcade/adapters';
 import { formatBoardAddress, isPrivateIpv4, parseBoardAddress, type BoardAddress } from './address';
-import { createBoardTransport } from './transport';
+import { createBoardTransport, utf8Length } from './transport';
 
 /**
  * Finding the board (ARCHITECTURE §9.4, W0). Order of preference: mDNS, last-known
@@ -76,17 +76,28 @@ export type TransportFactory = (address: BoardAddress) => Transport;
 export const defaultTransportFactory: TransportFactory = (a) => createBoardTransport({ host: a.host, port: a.port });
 
 /**
+ * A board answers `GET /api/version` with a few bytes (`2.0.2`, or `{"version":"2.0.2"}`).
+ * A longer answer is some other server, so a version check reads no more than this.
+ */
+export const MAX_VERSION_BODY_BYTES = 128;
+
+/** Transports for version checks (manual, last-known, scan): bodies capped at `MAX_VERSION_BODY_BYTES`. */
+export const versionCheckTransportFactory: TransportFactory = (a) =>
+  createBoardTransport({ host: a.host, port: a.port, maxBodyBytes: MAX_VERSION_BODY_BYTES });
+
+/**
  * Asks one address for `GET /api/version` (read-only, allowlisted). Returns the candidate
- * if something answering like a board is there, else null.
+ * only if it answered 200, without a redirect (the transport refuses those), with a short
+ * version string; else null.
  */
 export async function checkBoard(
   address: BoardAddress,
   options: { transportFactory?: TransportFactory; timeoutMs?: number; source?: BoardCandidate['source'] } = {},
 ): Promise<BoardCandidate | null> {
-  const transport = (options.transportFactory ?? defaultTransportFactory)(address);
+  const transport = (options.transportFactory ?? versionCheckTransportFactory)(address);
   try {
     const res = await transport.get('/api/version', { timeoutMs: options.timeoutMs ?? 1500 });
-    if (res.status !== 200) return null;
+    if (res.status !== 200 || utf8Length(res.body) > MAX_VERSION_BODY_BYTES) return null;
     const version = parseVersion(res.body);
     if (version === undefined) return null;
     return { address, version, source: options.source ?? 'manual' };

@@ -2,7 +2,8 @@ import { ULID_PATTERN } from '@arcade/event-schema';
 import type { Transport } from '@arcade/adapters';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BoardAddress } from './address';
-import { BoardDiscovery, LastKnownAddress, checkManualAddress, probeSubnet, type KeyValueStorage } from './discovery';
+import { BoardDiscovery, LastKnownAddress, checkBoard, checkManualAddress, probeSubnet, type KeyValueStorage } from './discovery';
+import { createBoardTransport, type FetchLike, type ResponseLike } from './transport';
 import { connectBoard } from './board';
 import { systemClock, systemIds, systemScheduler } from './runtime';
 
@@ -132,6 +133,44 @@ describe('subnet probe (opt-in)', () => {
     expect(new Set(net.asked).size).toBe(254);
     expect(net.asked.every((u) => u.endsWith(':3180/api/version'))).toBe(true);
     expect(net.max()).toBeLessThanOrEqual(8);
+  });
+
+  it('counts a host only if /api/version gives a short version string, with no redirect', async () => {
+    // The real transport over a fetch that answers per host the way odd LAN devices do.
+    const answers: Record<string, Omit<Partial<ResponseLike>, 'body' | 'text'> & { text: string }> = {
+      '192.168.1.10': { text: '2.0.2' },
+      '192.168.1.11': { text: '{"version":"2.1.0"}' },
+      '192.168.1.20': { text: '2.0.2', redirected: true },
+      '192.168.1.21': { text: '2.0.2', url: 'http://192.168.1.99:3180/api/version' },
+      '192.168.1.22': { text: '2.0.2', status: 301 },
+      '192.168.1.23': { text: JSON.stringify({ version: '2.0.2', page: 'x'.repeat(4000) }) },
+      '192.168.1.24': { text: `"2.0.2"${' '.repeat(500)}` },
+      '192.168.1.25': { text: '<html>router</html>' },
+    };
+    const fetch: FetchLike = async (url) => {
+      const host = /^http:\/\/([^:/]+)/.exec(url)?.[1] ?? '';
+      const a = answers[host];
+      if (!a) throw new Error('timeout');
+      const { text, ...rest } = a;
+      return { status: 200, headers: { get: () => null }, text: async () => text, ...rest };
+    };
+    const result = await probeSubnet({
+      near: '192.168.1.1',
+      transportFactory: (a) => createBoardTransport({ host: a.host, port: a.port, fetch }),
+    });
+    expect(result.map((c) => [c.address.host, c.version])).toEqual([
+      ['192.168.1.10', '2.0.2'],
+      ['192.168.1.11', '2.1.0'],
+    ]);
+  });
+
+  it('a version check does not read a long answer', async () => {
+    const text = vi.fn(async () => 'x'.repeat(100_000));
+    const fetch = vi.fn<FetchLike>(async () => ({ status: 200, headers: { get: () => '100000' }, text }));
+    vi.stubGlobal('fetch', fetch);
+    expect(await checkBoard({ host: '192.168.1.40', port: 3180 })).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(text).not.toHaveBeenCalled();
   });
 
   it('stops when cancelled and refuses public networks', async () => {

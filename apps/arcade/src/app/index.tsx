@@ -2,7 +2,7 @@ import { BOARD_PORT } from '@arcade/adapters';
 import {
   checkBoard,
   checkManualAddress,
-  defaultTransportFactory,
+  versionCheckTransportFactory,
   formatBoardAddress,
   isPrivateIpv4,
   parseBoardAddress,
@@ -249,7 +249,7 @@ export default function ConnectScreen() {
       setScan({ running: true, prefix: target, done: 0, total: SCAN_SIZE, found: [] });
       // Count answered addresses for the progress bar (one GET /api/version each).
       const counting: TransportFactory = (a) => {
-        const t = defaultTransportFactory(a);
+        const t = versionCheckTransportFactory(a);
         return {
           ...t,
           get: (path, options) =>

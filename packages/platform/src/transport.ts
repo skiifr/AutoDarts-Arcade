@@ -21,13 +21,33 @@ import { canonicalIpHost, isPrivateHost } from './address';
  *   Every URL is built from the canonical host, which is checked again before each request
  *   and each socket, so what is checked is what a URL parser will reach;
  * - request timeouts, no redirects, and size caps on bodies and frames.
+ *
+ * **Redirects.** Every GET asks for `redirect: 'error'`, which browsers and expo/fetch (the
+ * global fetch on Expo native builds) honour. React Native's own fetch ignores it and the
+ * iOS and Android stacks follow redirects themselves, so the response is checked as well,
+ * before any of the body is read: a response that says it was redirected, comes from any
+ * other URL, or is a 3xx is refused and its request aborted. A stack that follows a redirect
+ * has already sent that request, though (RISK-REGISTER).
+ *
+ * **Body cap.** A body that streams (browsers, expo/fetch, Node) is read chunk by chunk and
+ * dropped as soon as it passes the cap. React Native's own fetch has no stream, so there the
+ * body is buffered natively, within the timeout, before it can be measured.
  */
 
 /** Minimal structural types, so this compiles without DOM or Node type libraries. */
+export interface BodyReaderLike {
+  read(): Promise<{ done: boolean; value?: Uint8Array }>;
+  cancel(reason?: unknown): Promise<void>;
+}
 export interface ResponseLike {
   status: number;
+  /** The URL the response came from, after any redirect the stack followed. */
   url?: string;
+  /** True if the stack followed a redirect (WHATWG fetch and expo/fetch say so). */
+  redirected?: boolean;
   headers: { get(name: string): string | null };
+  /** The body as a byte stream, where the fetch has one. */
+  body?: { getReader(): BodyReaderLike } | null;
   text(): Promise<string>;
 }
 export interface AbortSignalLike {
@@ -97,12 +117,79 @@ export function assertAllowed(kind: 'GET' | 'WS', pathWithQuery: string): void {
   }
 }
 
+const DEFAULT_PORTS: Readonly<Record<string, number>> = { http: 80, ws: 80, https: 443, wss: 443 };
+
+/**
+ * A URL in one form for comparison: lower-case scheme, canonical IP host, the port written
+ * out even when it is the scheme's default, path and query as given, no fragment. Null for
+ * anything else (a name, user info, another scheme), so such a URL never matches a board's.
+ * `http://192.168.1.40/x` and `http://192.168.1.40:80/x` are the same URL; so are
+ * `http://[fe80:0:0:0:0:0:0:1]:3180/x` and `http://[fe80::1]:3180/x`.
+ */
+export function normaliseBoardUrl(url: string): string | null {
+  const m = /^([a-z][a-z0-9+.-]*):\/\/(\[[^\]]*\]|[^/?#:@[\]]*)(?::(\d*))?([/?][^#]*)?(?:#.*)?$/i.exec(url);
+  if (!m) return null;
+  const scheme = (m[1] as string).toLowerCase();
+  const defaultPort = DEFAULT_PORTS[scheme];
+  if (defaultPort === undefined) return null;
+  const host = canonicalIpHost((m[2] as string).toLowerCase());
+  if (host === null) return null;
+  const port = m[3] ? Number(m[3]) : defaultPort;
+  const rest = m[4] ?? '/';
+  return `${scheme}://${host}:${port}${rest.startsWith('?') ? `/${rest}` : rest}`;
+}
+
+interface TextDecoderLike {
+  decode(input?: Uint8Array, options?: { stream?: boolean }): string;
+}
+
 interface Globals {
   fetch?: FetchLike;
   WebSocket?: WebSocketCtor;
   AbortController?: new () => AbortControllerLike;
+  TextDecoder?: new (label?: string) => TextDecoderLike;
   setTimeout(fn: () => void, ms: number): unknown;
   clearTimeout(h: unknown): void;
+}
+
+/**
+ * Reads a body of at most `max` bytes. A declared Content-Length over the cap is refused
+ * unread; a streamed body is cancelled as soon as it passes the cap. Without a stream (or a
+ * TextDecoder) the whole body is read first and then measured.
+ */
+async function readCapped(res: ResponseLike, max: number, Decoder: Globals['TextDecoder'], abort: () => void): Promise<string> {
+  const tooBig = (): Error => {
+    abort();
+    return new Error(`response over ${max} bytes`);
+  };
+  const declared = Number(res.headers.get('content-length') ?? NaN);
+  if (Number.isFinite(declared) && declared > max) throw tooBig();
+  const stream = res.body;
+  if (!stream || typeof stream.getReader !== 'function' || !Decoder) {
+    const text = await res.text();
+    if (utf8Length(text) > max) throw tooBig();
+    return text;
+  }
+  const reader = stream.getReader();
+  const decoder = new Decoder('utf-8');
+  let size = 0;
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    size += value.byteLength;
+    if (size > max) {
+      try {
+        reader.cancel().catch(() => undefined);
+      } catch {
+        // the request is aborted anyway
+      }
+      throw tooBig();
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
 }
 
 export function createBoardTransport(options: BoardTransportOptions): Transport {
@@ -129,12 +216,14 @@ export function createBoardTransport(options: BoardTransportOptions): Transport 
     assertAllowed('GET', path);
     if (!doFetch) throw new Error('fetch is not available');
     const url = boardUrl('http', path);
+    const expected = normaliseBoardUrl(url);
     const timeoutMs = call?.timeoutMs ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const controller = Abort ? new Abort() : undefined;
+    const abort = (): void => controller?.abort();
     let timer: unknown;
     const timeout = new Promise<never>((_, reject) => {
       timer = g.setTimeout(() => {
-        controller?.abort();
+        abort();
         reject(new Error(`timeout after ${timeoutMs} ms`));
       }, timeoutMs);
     });
@@ -143,14 +232,14 @@ export function createBoardTransport(options: BoardTransportOptions): Transport 
         const init: Parameters<FetchLike>[1] = { method: 'GET', redirect: 'error', headers: { accept: 'application/json, text/plain' } };
         if (controller) init.signal = controller.signal;
         const res = await doFetch(url, init);
-        // A redirect could lead off the allowlist; refuse it (React Native follows them).
-        if (res.url && res.url.toLowerCase().replace(/\/$/, '') !== url.toLowerCase()) {
-          throw new BoardRequestRefused(`redirected from ${path}`);
+        // A redirect could lead off the allowlist or off the home network. Not every stack
+        // honours redirect: 'error' (see the top of this file), so check before reading.
+        const movedTo = typeof res.url === 'string' && res.url !== '' ? normaliseBoardUrl(res.url) : expected;
+        if (res.redirected === true || (res.status >= 300 && res.status < 400) || movedTo !== expected) {
+          abort();
+          throw new BoardRequestRefused(`GET ${path} was redirected; redirects are refused`);
         }
-        const declared = Number(res.headers.get('content-length') ?? NaN);
-        if (Number.isFinite(declared) && declared > maxBody) throw new Error(`response over ${maxBody} bytes`);
-        const body = await res.text();
-        if (utf8Length(body) > maxBody) throw new Error(`response over ${maxBody} bytes`);
+        const body = await readCapped(res, maxBody, g.TextDecoder, abort);
         return { status: res.status, body };
       })();
       return await Promise.race([work, timeout]);
