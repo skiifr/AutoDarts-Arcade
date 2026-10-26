@@ -1,4 +1,4 @@
-import type { SqlExecutor, SqlTx, SqlValue } from './sqlite';
+import { LOG_BUSY_TIMEOUT_MS, type SqlExecutor, type SqlTx, type SqlValue } from './sqlite';
 
 /**
  * The parts of expo-sqlite's async `SQLiteDatabase` this binding uses. Typed
@@ -6,7 +6,7 @@ import type { SqlExecutor, SqlTx, SqlValue } from './sqlite';
  * the app passes in the database it opened, e.g.
  *
  *   const db = await openDatabaseAsync('arcade.db');
- *   const store = new SqliteLogStore(expoSqliteExecutor(db));
+ *   const store = new SqliteLogStore(expoSqliteExecutor(db, { exclusive: Platform.OS !== 'web' }));
  *
  * `expo-sqlite.typecheck.ts` checks that expo-sqlite's real type fits.
  */
@@ -18,8 +18,20 @@ export interface ExpoStatementsLike {
 
 export interface ExpoSqliteDatabaseLike extends ExpoStatementsLike {
   withTransactionAsync(task: () => Promise<void>): Promise<void>;
-  /** Native only: runs the task on its own connection, so no other query interleaves. */
+  /**
+   * Native: runs the task on a new connection of its own, so no other query interleaves.
+   * Web: defined, but throws "not supported on web" before running the task.
+   */
   withExclusiveTransactionAsync?(task: (txn: ExpoStatementsLike) => Promise<void>): Promise<void>;
+}
+
+export interface ExpoSqliteExecutorOptions {
+  /**
+   * Whether transactions use `withExclusiveTransactionAsync`. Pass `Platform.OS !== 'web'`.
+   * Left out, the binding tries it, and if expo-sqlite answers that it is not supported on
+   * web, uses `withTransactionAsync` from then on.
+   */
+  exclusive?: boolean;
 }
 
 function statements(s: ExpoStatementsLike): SqlTx {
@@ -31,22 +43,46 @@ function statements(s: ExpoStatementsLike): SqlTx {
   };
 }
 
+const WEB_UNSUPPORTED = /not supported on web/i;
+
 /**
- * `SqlExecutor` over expo-sqlite. Transactions use `withExclusiveTransactionAsync` where
- * available (iOS, Android, Fire OS), which commits before it resolves and rolls back on
- * error; on web, `withTransactionAsync`.
+ * `SqlExecutor` over expo-sqlite. Both kinds of transaction commit before they resolve and
+ * roll back on error.
+ * - **iOS, Android, Fire OS:** `withExclusiveTransactionAsync`, on a new connection each
+ *   time. A busy timeout is per connection, so it is set again there first (journal mode is
+ *   in the file, and synchronous is SQLite's default FULL: see `SqliteLogStore`).
+ * - **Web:** `withTransactionAsync` on the one connection. expo-sqlite defines the exclusive
+ *   kind there too, but it throws. The plain kind is enough because `SqliteLogStore` runs
+ *   its appends, loads and listings one at a time, so nothing else can run inside an open
+ *   transaction and see its uncommitted rows. (The memory store would also work on web, but
+ *   would lose the log on every reload, and this keeps one code path on every platform.)
  */
-export function expoSqliteExecutor(db: ExpoSqliteDatabaseLike): SqlExecutor {
+export function expoSqliteExecutor(db: ExpoSqliteDatabaseLike, options: ExpoSqliteExecutorOptions = {}): SqlExecutor {
   const base = statements(db);
+  /** Known once a call has shown it: undefined until then, unless the caller said. */
+  let exclusive = options.exclusive;
   return {
     ...base,
     exec: (sql) => db.execAsync(sql),
     transaction: async (task) => {
-      if (db.withExclusiveTransactionAsync) {
-        await db.withExclusiveTransactionAsync((txn) => task(statements(txn)));
-      } else {
-        await db.withTransactionAsync(() => task(base));
+      if (exclusive !== false && db.withExclusiveTransactionAsync) {
+        let started = false;
+        try {
+          await db.withExclusiveTransactionAsync(async (txn) => {
+            started = true;
+            await txn.execAsync(`PRAGMA busy_timeout = ${LOG_BUSY_TIMEOUT_MS}`);
+            await task(statements(txn));
+          });
+          exclusive = true;
+          return;
+        } catch (e) {
+          // Fall back only when expo-sqlite refused before the task ran, the way it does on web.
+          const web = !started && exclusive === undefined && e instanceof Error && WEB_UNSUPPORTED.test(e.message);
+          if (!web) throw e;
+          exclusive = false;
+        }
       }
+      await db.withTransactionAsync(() => task(base));
     },
   };
 }

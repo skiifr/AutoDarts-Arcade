@@ -1,8 +1,9 @@
 import { BOARD_PORT } from '@arcade/adapters';
 import {
+  ConnectAttempts,
   checkBoard,
   checkManualAddress,
-  defaultTransportFactory,
+  versionCheckTransportFactory,
   formatBoardAddress,
   isPrivateIpv4,
   parseBoardAddress,
@@ -26,8 +27,8 @@ import {
   type BoardStatusTone,
   type PaletteKey,
 } from '@arcade/ui-kit';
-import { router } from 'expo-router';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Modal, Platform, ScrollView, TextInput, View } from 'react-native';
 import { boardLink, useBoardLink } from '@/live/board-link';
 import { HAS_LOCAL_NETWORK_PROMPT, afterLocalNetworkPrompt, lastKnownAddress, localNetworkNote } from '@/live/settings';
@@ -128,8 +129,8 @@ export default function ConnectScreen() {
   const [noteOpen, setNoteOpen] = useState(false);
   const [scan, setScan] = useState<Scan | null>(null);
   const [pickedPrefix, setPickedPrefix] = useState<string | null>(null);
-  /** Bumped by every connect and cancel, so a superseded attempt stops where it is. */
-  const attempt = useRef(0);
+  /** One connect attempt at a time; a superseded or cancelled one stops where it is and closes the link it opened. */
+  const [attempts] = useState(() => new ConnectAttempts(boardLink));
   const noteAnswer = useRef<((go: boolean) => void) | null>(null);
   const scanSignal = useRef<{ aborted: boolean } | null>(null);
 
@@ -170,9 +171,22 @@ export default function ConnectScreen() {
     noteAnswer.current = null;
   };
 
+  // Leaving W0 (Play demo, any other screen) or unmounting it gives up a pending connect and
+  // closes the link it opened, so a late answer can't push the ticker over another screen.
+  // An attempt that already got online is done, so going on to the ticker keeps its link.
+  useFocusEffect(
+    useCallback(
+      () => () => {
+        attempts.cancel();
+        setFlow((f) => (f.step === 'checking' || f.step === 'linking' ? { step: 'idle' } : f));
+      },
+      [attempts],
+    ),
+  );
+
   const connect = async (text: string) => {
-    const mine = ++attempt.current;
-    const stale = () => mine !== attempt.current;
+    const attempt = attempts.begin();
+    const stale = () => attempt.stale;
     setTouched(true);
     const parsed = parseBoardAddress(text);
     if (!parsed.ok) {
@@ -200,9 +214,14 @@ export default function ConnectScreen() {
       return;
     }
     const target = check.candidate.address;
-    boardLink.open(target);
+    const linked = attempt.link(target); // opens the link now
     setFlow({ step: 'linking', address: target });
-    if ((await boardLink.whenOnline()) !== 'online' || stale()) return;
+    const online = await linked;
+    if (stale()) return; // cancelled or superseded: whoever did that has reset the flow
+    if (!online) {
+      setFlow({ step: 'idle' });
+      return;
+    }
     void lastKnownAddress.set(target).catch(() => undefined);
     setLastKnown({ address: target, status: 'online', version: boardLink.getState().version ?? check.candidate.version });
     setFlow({ step: 'idle' });
@@ -210,9 +229,16 @@ export default function ConnectScreen() {
   };
 
   const cancel = () => {
-    attempt.current++;
+    attempts.cancel();
     boardLink.close();
     setFlow({ step: 'idle' });
+  };
+
+  /** Demo mode: nothing connects to the board, so a pending connect is given up first. */
+  const playDemo = () => {
+    attempts.cancel();
+    setFlow((f) => (f.step === 'checking' || f.step === 'linking' ? { step: 'idle' } : f));
+    router.push('/games');
   };
 
   const connectTo = (a: BoardAddress) => {
@@ -249,7 +275,7 @@ export default function ConnectScreen() {
       setScan({ running: true, prefix: target, done: 0, total: SCAN_SIZE, found: [] });
       // Count answered addresses for the progress bar (one GET /api/version each).
       const counting: TransportFactory = (a) => {
-        const t = defaultTransportFactory(a);
+        const t = versionCheckTransportFactory(a);
         return {
           ...t,
           get: (path, options) =>
@@ -336,7 +362,7 @@ export default function ConnectScreen() {
             {scan?.running ? 'Looking…' : scan ? 'No boards found' : 'No boards found yet'}
           </AText>
           <AText variant="caption" color="textMute">
-            Scan your network, or enter the address shown in the Autodarts app.
+            Scan your network, or enter the IP address shown in the Autodarts app.
           </AText>
         </View>
       ) : null}
@@ -366,7 +392,7 @@ export default function ConnectScreen() {
   const manual = (
     <Panel style={{ gap: s(space.md) }}>
       <AText variant="label" color="textMute" upper>
-        Or enter the board&apos;s address
+        Or enter the board&apos;s IP address
       </AText>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: s(space.sm) }}>
         <TextInput
@@ -436,7 +462,7 @@ export default function ConnectScreen() {
           Play every screen with simulated darts. Nothing connects to your board.
         </AText>
       </View>
-      <Button label="Play demo" icon="▶" variant="primary" size="lg" preferredFocus onPress={() => router.push('/games')} />
+      <Button label="Play demo" icon="▶" variant="primary" size="lg" preferredFocus onPress={playDemo} />
       <AText variant="caption" color="textMute">
         ⓘ On iPhone and iPad, iOS will ask for &quot;Local Network&quot; access when you connect. It&apos;s needed to reach the board.
       </AText>

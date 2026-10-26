@@ -1,10 +1,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { formatBoardAddress, isPrivateHost, parseBoardAddress } from './address';
-import { BoardRequestRefused, createBoardTransport, utf8Length, type FetchLike, type ResponseLike, type WebSocketLike } from './transport';
+import { BoardRequestRefused, createBoardTransport, utf8Length, type FetchLike, type ResponseLike, type WebSocketCtor, type WebSocketLike } from './transport';
 
 afterEach(() => {
   vi.useRealTimers();
 });
+
+/** Node's http server and TextEncoder, typed structurally: this package compiles without Node's type library. */
+interface NodeHttpResponse {
+  writeHead(status: number, headers: Record<string, string>): void;
+  write(chunk: string): boolean;
+  end(): void;
+  on(event: 'close', cb: () => void): void;
+}
+interface NodeHttpServer {
+  listen(port: number, host: string, cb: () => void): void;
+  address(): { port: number };
+  closeAllConnections(): void;
+  close(cb: () => void): void;
+}
+type NodeHttp = { createServer(handler: (req: unknown, res: NodeHttpResponse) => void): NodeHttpServer };
+async function nodeHttp(): Promise<NodeHttp> {
+  const specifier = 'node:http';
+  return (await import(/* @vite-ignore */ specifier)) as NodeHttp;
+}
+const { TextEncoder: Utf8Encoder } = globalThis as unknown as { TextEncoder: new () => { encode(s: string): Uint8Array } };
 
 const ok = (body: string, extra: Partial<ResponseLike> = {}): ResponseLike => ({
   status: 200,
@@ -13,54 +32,41 @@ const ok = (body: string, extra: Partial<ResponseLike> = {}): ResponseLike => ({
   ...extra,
 });
 
-describe('board addresses', () => {
-  it.each([
-    ['127.0.0.1', true],
-    ['10.0.0.7', true],
-    ['172.16.0.1', true],
-    ['172.31.255.254', true],
-    ['192.168.1.40', true],
-    ['169.254.10.20', true],
-    ['autodarts.local', true],
-    ['my-board.local', true],
-    ['localhost', true],
-    ['[::1]', true],
-    ['[fe80::1]', true],
-    ['[fd12:3456::1]', true],
-    ['172.32.0.1', false],
-    ['172.15.0.1', false],
-    ['8.8.8.8', false],
-    ['192.169.0.1', false],
-    ['100.64.0.1', false],
-    ['example.com', false],
-    ['autodarts.local.evil.com', false],
-    ['[2001:db8::1]', false],
-    ['999.168.1.1', false],
-  ])('%s private: %s', (host, expected) => {
-    expect(isPrivateHost(host)).toBe(expected);
-  });
-
-  it('parses what people type', () => {
-    expect(parseBoardAddress(' 192.168.1.40 ')).toEqual({ ok: true, address: { host: '192.168.1.40', port: 3180 } });
-    expect(parseBoardAddress('192.168.1.40:3181')).toEqual({ ok: true, address: { host: '192.168.1.40', port: 3181 } });
-    expect(parseBoardAddress('Autodarts.LOCAL')).toEqual({ ok: true, address: { host: 'autodarts.local', port: 3180 } });
-    expect(parseBoardAddress('[FE80::1]:3180')).toEqual({ ok: true, address: { host: '[fe80::1]', port: 3180 } });
-    expect(formatBoardAddress({ host: '192.168.1.40', port: 3180 })).toBe('192.168.1.40');
-    expect(formatBoardAddress({ host: '192.168.1.40', port: 81 })).toBe('192.168.1.40:81');
-  });
-
-  it.each(['', 'http://192.168.1.40', '192.168.1.40/api/config', '8.8.8.8', 'board.example.com', '192.168.1.40:0', '192.168.1.40:abc', 'fe80::1'])(
-    'refuses %j',
-    (input) => {
-      expect(parseBoardAddress(input).ok).toBe(false);
-    },
-  );
-});
-
 describe('HTTP transport', () => {
   it('refuses a public address at creation', () => {
     expect(() => createBoardTransport({ host: '8.8.8.8', fetch: vi.fn<FetchLike>() })).toThrow(BoardRequestRefused);
     expect(() => createBoardTransport({ host: 'example.com', fetch: vi.fn<FetchLike>() })).toThrow(BoardRequestRefused);
+  });
+
+  it.each(['010.0.0.5', '172.016.0.1', '192.168.01.40', '0x0a.0.0.1', 'autodarts.local', 'localhost'])(
+    'refuses %s before any request or socket: a URL parser would not read it as a private address',
+    (host) => {
+      const fetch = vi.fn<FetchLike>();
+      const Ws = vi.fn();
+      expect(() => createBoardTransport({ host, fetch, WebSocket: Ws as unknown as WebSocketCtor })).toThrow(BoardRequestRefused);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(Ws).not.toHaveBeenCalled();
+    },
+  );
+
+  it('builds every request URL from the canonical host', async () => {
+    const urls: string[] = [];
+    const fetch: FetchLike = async (url) => {
+      urls.push(url);
+      return ok('2.0.2');
+    };
+    await createBoardTransport({ host: '[FE80:0:0:0:0:0:0:1]', fetch }).get('/api/version');
+    await createBoardTransport({ host: '192.168.1.40', port: 80, fetch }).get('/api/version');
+    expect(urls).toEqual(['http://[fe80::1]:3180/api/version', 'http://192.168.1.40:80/api/version']);
+    const sockets: string[] = [];
+    class RecordingWs extends FakeWs {
+      constructor(url: string) {
+        super(url);
+        sockets.push(url);
+      }
+    }
+    createBoardTransport({ host: '[FD12:3456:0:0:0:0:0:1]', fetch, WebSocket: RecordingWs }).openEvents({ stateOnly: true }, { onOpen() {}, onMessage() {}, onClose() {} });
+    expect(sockets).toEqual(['ws://[fd12:3456::1]:3180/api/events?type=state']);
   });
 
   it('returns status and body', async () => {
@@ -88,6 +94,130 @@ describe('HTTP transport', () => {
   it('refuses a redirect', async () => {
     const t = createBoardTransport({ host: '192.168.1.40', fetch: async () => ok('{}', { url: 'http://192.168.1.40:3180/api/config' }) });
     await expect(t.get('/api/state')).rejects.toBeInstanceOf(BoardRequestRefused);
+  });
+
+  /** A fetch whose response the test shapes; records whether the body was read and the request aborted. */
+  function shaped(extra: Partial<ResponseLike>) {
+    const seen = { read: false, aborted: false };
+    class Abort {
+      signal = { aborted: false };
+      abort() {
+        seen.aborted = true;
+      }
+    }
+    const res: ResponseLike = {
+      ...ok(''),
+      text: async () => {
+        seen.read = true;
+        return '2.0.2';
+      },
+      ...extra,
+    };
+    return { seen, transport: createBoardTransport({ host: '192.168.1.40', fetch: async () => res, AbortController: Abort }) };
+  }
+
+  it.each<[string, Partial<ResponseLike>]>([
+    // React Native's own fetch ignores redirect: 'error' and the native stacks follow redirects.
+    ['says it was redirected, even back to the same URL', { redirected: true, url: 'http://192.168.1.40:3180/api/version' }],
+    ['comes from another path', { url: 'http://192.168.1.40:3180/api/config' }],
+    ['comes from another host', { url: 'http://203.0.113.9:3180/api/version' }],
+    ['comes from a name', { url: 'http://evil.example:3180/api/version' }],
+    ['comes from another port', { url: 'http://192.168.1.40:8080/api/version' }],
+    ['comes with user info', { url: 'http://x@192.168.1.40:3180/api/version' }],
+    ['is a 3xx the stack handed back', { status: 302 }],
+  ])('refuses a response that %s, before reading the body, and aborts the request', async (_, extra) => {
+    const { seen, transport } = shaped(extra);
+    await expect(transport.get('/api/version')).rejects.toBeInstanceOf(BoardRequestRefused);
+    expect(seen).toEqual({ read: false, aborted: true });
+  });
+
+  it.each([
+    ['192.168.1.40', 80],
+    ['192.168.1.40', 3180],
+    ['[FE80:0:0:0:0:0:0:1]', 3180],
+    ['[fd12:3456:0000::0001]', 80],
+  ])('does not take the URL parser’s normal form of %s:%i for a redirect', async (host, port) => {
+    // What a WHATWG fetch (browsers, expo/fetch, Node) reports as the response URL.
+    const fetch: FetchLike = async (url) => ok('2.0.2', { url: new URL(url).href, redirected: false });
+    await expect(createBoardTransport({ host, port, fetch }).get('/api/version')).resolves.toEqual({ status: 200, body: '2.0.2' });
+  });
+
+  /** A response body that arrives as byte chunks, like WHATWG and expo/fetch bodies. */
+  function streamed(chunks: Uint8Array[]) {
+    const seen = { reads: 0, cancelled: false, aborted: false };
+    class Abort {
+      signal = { aborted: false };
+      abort() {
+        seen.aborted = true;
+      }
+    }
+    const res: ResponseLike = {
+      ...ok(''),
+      text: async () => {
+        throw new Error('text() must not be used when the body streams');
+      },
+      body: {
+        getReader: () => ({
+          read: async () => {
+            const value = chunks[seen.reads++];
+            return value ? { done: false, value } : { done: true };
+          },
+          cancel: async () => {
+            seen.cancelled = true;
+          },
+        }),
+      },
+    };
+    return { seen, fetch: (async () => res) as FetchLike, Abort };
+  }
+
+  it('stops reading a streamed body as soon as it passes the cap', async () => {
+    const { seen, fetch, Abort } = streamed(Array.from({ length: 50 }, () => new Uint8Array(1000)));
+    const t = createBoardTransport({ host: '192.168.1.40', maxBodyBytes: 2500, fetch, AbortController: Abort });
+    await expect(t.get('/api/state')).rejects.toThrow(/over 2500 bytes/);
+    expect(seen).toEqual({ reads: 3, cancelled: true, aborted: true });
+  });
+
+  it('decodes a streamed body, a character split across chunks included', async () => {
+    const bytes = new Utf8Encoder().encode('{"name":"Zoë 🎯"}');
+    const { fetch, Abort } = streamed([bytes.slice(0, 11), bytes.slice(11, 15), bytes.slice(15)]);
+    const t = createBoardTransport({ host: '192.168.1.40', maxBodyBytes: bytes.byteLength, fetch, AbortController: Abort });
+    await expect(t.get('/api/state')).resolves.toEqual({ status: 200, body: '{"name":"Zoë 🎯"}' });
+  });
+
+  it('with a real fetch, never reads a body past the cap, even with no Content-Length', async () => {
+    const http = await nodeHttp();
+    let written = 0;
+    let closed = false;
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' }); // chunked: no Content-Length
+      const chunk = ' '.repeat(16 * 1024);
+      const timer = setInterval(() => {
+        if (written >= 8 * 1024 * 1024) {
+          clearInterval(timer);
+          res.end();
+          return;
+        }
+        res.write(chunk);
+        written += chunk.length;
+      }, 2);
+      res.on('close', () => {
+        closed = true;
+        clearInterval(timer);
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    try {
+      const t = createBoardTransport({ host: '127.0.0.1', port: server.address().port, maxBodyBytes: 64 * 1024, timeoutMs: 10_000 });
+      await expect(t.get('/api/state')).rejects.toThrow(/over 65536 bytes/);
+      const until = Date.now() + 3000;
+      while (!closed && Date.now() < until) await new Promise<void>((r) => setTimeout(() => r(), 10));
+      expect(closed).toBe(true);
+      expect(written).toBeLessThan(1024 * 1024);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 
   it('caps the body by Content-Length and by actual size', async () => {

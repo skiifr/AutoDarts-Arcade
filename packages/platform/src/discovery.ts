@@ -1,6 +1,6 @@
 import { BOARD_PORT, parseVersion, type Transport } from '@arcade/adapters';
 import { formatBoardAddress, isPrivateIpv4, parseBoardAddress, type BoardAddress } from './address';
-import { createBoardTransport } from './transport';
+import { createBoardTransport, utf8Length } from './transport';
 
 /**
  * Finding the board (ARCHITECTURE §9.4, W0). Order of preference: mDNS, last-known
@@ -40,7 +40,10 @@ export interface KeyValueStorage {
 
 const LAST_KNOWN_KEY = 'arcade.board.lastKnownAddress';
 
-/** The last board address that worked. Invalid or non-private stored values are ignored. */
+/**
+ * The last board address that worked. A stored value that fails today's check (a name, a
+ * leading-zero IPv4, a public address saved by an older build) is discarded on load.
+ */
 export class LastKnownAddress {
   private readonly storage: KeyValueStorage;
 
@@ -52,7 +55,9 @@ export class LastKnownAddress {
     const raw = await this.storage.getItem(LAST_KNOWN_KEY);
     if (raw === null) return null;
     const parsed = parseBoardAddress(raw);
-    return parsed.ok ? parsed.address : null;
+    if (parsed.ok) return parsed.address;
+    await Promise.resolve(this.storage.removeItem?.(LAST_KNOWN_KEY)).catch(() => undefined);
+    return null;
   }
 
   async set(address: BoardAddress): Promise<void> {
@@ -71,17 +76,28 @@ export type TransportFactory = (address: BoardAddress) => Transport;
 export const defaultTransportFactory: TransportFactory = (a) => createBoardTransport({ host: a.host, port: a.port });
 
 /**
+ * A board answers `GET /api/version` with a few bytes (`2.0.2`, or `{"version":"2.0.2"}`).
+ * A longer answer is some other server, so a version check reads no more than this.
+ */
+export const MAX_VERSION_BODY_BYTES = 128;
+
+/** Transports for version checks (manual, last-known, scan): bodies capped at `MAX_VERSION_BODY_BYTES`. */
+export const versionCheckTransportFactory: TransportFactory = (a) =>
+  createBoardTransport({ host: a.host, port: a.port, maxBodyBytes: MAX_VERSION_BODY_BYTES });
+
+/**
  * Asks one address for `GET /api/version` (read-only, allowlisted). Returns the candidate
- * if something answering like a board is there, else null.
+ * only if it answered 200, without a redirect (the transport refuses those), with a short
+ * version string; else null.
  */
 export async function checkBoard(
   address: BoardAddress,
   options: { transportFactory?: TransportFactory; timeoutMs?: number; source?: BoardCandidate['source'] } = {},
 ): Promise<BoardCandidate | null> {
-  const transport = (options.transportFactory ?? defaultTransportFactory)(address);
+  const transport = (options.transportFactory ?? versionCheckTransportFactory)(address);
   try {
     const res = await transport.get('/api/version', { timeoutMs: options.timeoutMs ?? 1500 });
-    if (res.status !== 200) return null;
+    if (res.status !== 200 || utf8Length(res.body) > MAX_VERSION_BODY_BYTES) return null;
     const version = parseVersion(res.body);
     if (version === undefined) return null;
     return { address, version, source: options.source ?? 'manual' };
@@ -159,5 +175,74 @@ export class BoardDiscovery implements Discovery {
     if (!last) return [];
     const c = await checkBoard(last, { transportFactory: this.transportFactory, source: 'last-known' });
     return c ? [c] : [];
+  }
+}
+
+/** What W0 needs of the app's board link to connect, and to take a connection back. */
+export interface ConnectLink {
+  open(address: BoardAddress): void;
+  close(): void;
+  /** Settles `online` the first time the link just opened is online, `closed` if it is closed or replaced first. */
+  whenOnline(): Promise<'online' | 'closed'>;
+}
+
+export interface ConnectAttempt {
+  /** True once a newer attempt began or this one was cancelled: stop, and change nothing. */
+  readonly stale: boolean;
+  /**
+   * Opens the link and waits until it is online. True means the attempt succeeded and is
+   * done. False if it was cancelled or superseded first (the link it opened is then closed)
+   * or the link was closed by someone else.
+   */
+  link(address: BoardAddress): Promise<boolean>;
+}
+
+/**
+ * W0's connect attempts, one at a time (§9.4). `begin()` supersedes the attempt before it;
+ * `cancel()` (Cancel, Play demo, leaving or unmounting the screen) abandons the pending one
+ * and closes the link it opened. A late answer of an abandoned attempt changes nothing, so
+ * it can't push the ticker over a demo game. An attempt that got online is done: `cancel()`
+ * then leaves its link alone, since the link now belongs to the screen it led to.
+ */
+export class ConnectAttempts {
+  private readonly boardLink: ConnectLink;
+  private current: { opened: boolean } | null = null;
+
+  constructor(link: ConnectLink) {
+    this.boardLink = link;
+  }
+
+  /** Whether an attempt is under way (checking or linking). */
+  get pending(): boolean {
+    return this.current !== null;
+  }
+
+  begin(): ConnectAttempt {
+    this.cancel();
+    const me = { opened: false };
+    this.current = me;
+    const stale = (): boolean => this.current !== me;
+    return {
+      get stale() {
+        return stale();
+      },
+      link: async (address) => {
+        if (stale()) return false;
+        me.opened = true;
+        this.boardLink.open(address);
+        const result = await this.boardLink.whenOnline();
+        if (stale()) return false;
+        this.current = null;
+        return result === 'online';
+      },
+    };
+  }
+
+  /** Abandons the pending attempt, if any, and closes the link it opened. */
+  cancel(): void {
+    const me = this.current;
+    if (!me) return;
+    this.current = null;
+    if (me.opened) this.boardLink.close();
   }
 }
