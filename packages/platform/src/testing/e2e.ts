@@ -418,6 +418,8 @@ export async function e2eRun(seed: number, options: E2EOptions = {}): Promise<E2
   }
   let idleCrashes = options.idleCrashOnly ? 1 : Infinity;
   for (let v = 0; v < visits; v++) {
+    // Nobody throws once the app says the game is over (a correction may still reopen it).
+    if (screen()?.finished) break;
     const trouble = options.clean ? 1 : r();
     if (trouble < 0.3) {
       const at = between(0, 4000);
